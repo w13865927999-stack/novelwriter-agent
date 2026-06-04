@@ -90,10 +90,16 @@ def main() -> int:
         web_text = (ROOT / "novelwriter" / "web.py").read_text(encoding="utf-8")
         if "生成下一章" not in index_text:
             raise AssertionError("web/index.html must contain the generate next chapter button text")
+        if "每章目标字数" not in index_text:
+            raise AssertionError("web/index.html must contain the chapter word count label")
         if "/next" not in app_text or "generateNextChapter" not in app_text:
             raise AssertionError("web/app.js must contain next chapter request logic")
+        if "chapter_word_count" not in app_text:
+            raise AssertionError("web/app.js must send chapter_word_count")
         if '@app.post("/api/projects/{slug}/next")' not in web_text:
             raise AssertionError("novelwriter/web.py must expose the next chapter API route")
+        if "chapter_word_count" not in web_text:
+            raise AssertionError("novelwriter/web.py must accept chapter_word_count")
 
         memory_path = project_path / "memory.json"
         memory = json.loads(memory_path.read_text(encoding="utf-8"))

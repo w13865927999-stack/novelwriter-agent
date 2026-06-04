@@ -33,8 +33,10 @@ def _json(data: Any) -> str:
 
 
 def core_setting_prompt(profile: dict[str, Any]) -> str:
+    target_words = int(profile.get("words_per_chapter") or 3000)
     return f"""[TASK:CORE_SETTING]
 请根据 PROFILE_JSON 生成小说核心设定。只输出合法 JSON，不要输出 Markdown 代码块。
+每章目标字数：约 {target_words} 字。请据此设计章节节奏、冲突密度和信息释放速度。
 
 PROFILE_JSON:
 {_json(profile)}
@@ -117,8 +119,10 @@ def outline_prompt(
     worldbuilding: str,
     characters: dict[str, Any],
 ) -> str:
+    target_words = int(profile.get("words_per_chapter") or 3000)
     return f"""[TASK:OUTLINE]
 请生成整本小说完整大纲，输出 Markdown。
+每章目标字数：约 {target_words} 字。章节大纲需要匹配这个篇幅，避免单章事件过少或过载。
 
 要求：
 1. 先给出三幕或多卷结构。
@@ -153,6 +157,7 @@ def chapter_generation_prompt(
     previous_summary: str,
     chapter_number: int,
 ) -> str:
+    target_words = int(profile.get("words_per_chapter") or 3000)
     return f"""[TASK:CHAPTER]
 CHAPTER_NUMBER: {chapter_number}
 请生成第 {chapter_number} 章正文和记忆更新。只输出合法 JSON，不要输出 Markdown 代码块。
@@ -164,6 +169,7 @@ CHAPTER_NUMBER: {chapter_number}
 4. 每章必须有冲突、推进、人物变化和结尾钩子。
 5. 不要制造与既有记忆冲突的新设定。
 6. 如新增伏笔、地点、人物、事件，必须在对应字段登记。
+7. 本章正文目标字数约 {target_words} 字，请尽量贴近该篇幅并保持节奏完整。
 
 PROFILE_JSON:
 {_json(profile)}
@@ -376,4 +382,3 @@ PROFILE_JSON:
 ORIGINAL_CHAPTER:
 {chapter_text}
 """
-

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -32,8 +32,14 @@ class CreateProjectRequest(BaseModel):
     target_readers: str = "喜欢强剧情和连续追更的读者"
     world_seed: str = "由 NovelWriter Agent 根据题材自动扩展世界观"
     target_words: int | None = None
+    chapter_word_count: int | None = Field(default=None, ge=300, le=20000)
     words_per_chapter: int = Field(default=3000, ge=300, le=20000)
     pacing_reference: str = "每章有冲突、推进和结尾钩子"
+
+
+class GenerationOptions(BaseModel):
+    chapter_word_count: int | None = Field(default=None, ge=300, le=20000)
+    words_per_chapter: int | None = Field(default=None, ge=300, le=20000)
 
 
 def _project_or_404(slug: str) -> None:
@@ -45,6 +51,29 @@ def _project_or_404(slug: str) -> None:
 
 def _path_payload(path: Path) -> dict[str, str]:
     return {"path": str(path.resolve())}
+
+
+def _requested_chapter_word_count(options: GenerationOptions | None) -> int | None:
+    if options is None:
+        return None
+    value = options.chapter_word_count or options.words_per_chapter
+    return int(value) if value else None
+
+
+def _apply_chapter_word_count(slug: str, options: GenerationOptions | None) -> None:
+    chapter_word_count = _requested_chapter_word_count(options)
+    if chapter_word_count is None:
+        return
+
+    project = agent.storage.load_metadata(slug)
+    project.words_per_chapter = chapter_word_count
+    if not project.target_words:
+        project.target_words = chapter_word_count * project.chapter_count
+    agent.storage.save_metadata(project)
+
+    memory = agent.storage.load_project_memory(slug)
+    memory.setdefault("novel_info", {})["words_per_chapter"] = chapter_word_count
+    agent.storage.save_project_memory(slug, memory)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -72,14 +101,14 @@ def list_projects() -> dict[str, Any]:
 
 @app.post("/api/projects")
 def create_project(payload: CreateProjectRequest) -> dict[str, Any]:
-    words_per_chapter = int(payload.words_per_chapter)
+    chapter_word_count = int(payload.chapter_word_count or payload.words_per_chapter or 3000)
     answers = {
         "title": payload.title,
         "genre": payload.genre,
         "target_readers": payload.target_readers,
-        "target_words": int(payload.target_words or words_per_chapter * payload.chapter_count),
+        "target_words": int(payload.target_words or chapter_word_count * payload.chapter_count),
         "chapter_count": payload.chapter_count,
-        "words_per_chapter": words_per_chapter,
+        "words_per_chapter": chapter_word_count,
         "protagonist": payload.protagonist,
         "world_seed": payload.world_seed,
         "style": payload.style,
@@ -105,8 +134,9 @@ def get_project(slug: str) -> dict[str, Any]:
 
 
 @app.post("/api/projects/{slug}/generate/{kind}")
-def generate(slug: str, kind: str) -> dict[str, Any]:
+def generate(slug: str, kind: str, options: GenerationOptions | None = Body(default=None)) -> dict[str, Any]:
     _project_or_404(slug)
+    _apply_chapter_word_count(slug, options)
     if kind == "setting":
         result = agent.generate_core_setting(slug)
         return {"kind": kind, **_path_payload(result["path"]), "data": result["data"]}
@@ -131,8 +161,9 @@ def generate(slug: str, kind: str) -> dict[str, Any]:
 
 
 @app.post("/api/projects/{slug}/next")
-def generate_next_chapter(slug: str) -> dict[str, Any]:
+def generate_next_chapter(slug: str, options: GenerationOptions | None = Body(default=None)) -> dict[str, Any]:
     _project_or_404(slug)
+    _apply_chapter_word_count(slug, options)
     try:
         result = agent.generate_next_chapter(slug)
     except ValueError as exc:

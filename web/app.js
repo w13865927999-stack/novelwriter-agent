@@ -14,6 +14,16 @@ function setOutput(value) {
   output.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
 }
 
+function currentChapterWordCount() {
+  const input = document.querySelector('[name="chapter_word_count"]');
+  const value = Number(input?.value || 3000);
+  return Number.isFinite(value) && value > 0 ? value : 3000;
+}
+
+function generationPayload() {
+  return { chapter_word_count: currentChapterWordCount() };
+}
+
 async function request(path, options = {}) {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
@@ -120,6 +130,7 @@ $("#projectForm").addEventListener("submit", async (event) => {
     const form = new FormData(event.currentTarget);
     const payload = Object.fromEntries(form.entries());
     payload.chapter_count = Number(payload.chapter_count || 10);
+    payload.chapter_word_count = currentChapterWordCount();
     const data = await request("/api/projects", {
       method: "POST",
       body: JSON.stringify(payload),
@@ -137,7 +148,10 @@ document.querySelectorAll("[data-generate]").forEach((button) => {
     }
     const kind = button.dataset.generate;
     await withBusy(button, async () => {
-      const data = await request(`/api/projects/${state.activeSlug}/generate/${kind}`, { method: "POST" });
+      const data = await request(`/api/projects/${state.activeSlug}/generate/${kind}`, {
+        method: "POST",
+        body: JSON.stringify(generationPayload()),
+      });
       setOutput(data);
       await loadProject(state.activeSlug);
       if (kind === "first_chapter") {
@@ -165,7 +179,10 @@ $("#generateNextChapter").addEventListener("click", async () => {
     return;
   }
   await withBusy($("#generateNextChapter"), async () => {
-    const data = await request(`/api/projects/${state.activeSlug}/next`, { method: "POST" });
+    const data = await request(`/api/projects/${state.activeSlug}/next`, {
+      method: "POST",
+      body: JSON.stringify(generationPayload()),
+    });
     setOutput({
       message: data.message,
       project: data.project_name,
