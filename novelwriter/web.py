@@ -42,6 +42,19 @@ class GenerationOptions(BaseModel):
     words_per_chapter: int | None = Field(default=None, ge=300, le=20000)
 
 
+class ChapterEditRequest(BaseModel):
+    content: str = Field(min_length=1)
+
+
+class ChapterInstructionRequest(BaseModel):
+    instruction: str = "加强冲突、减少解释、保持原有剧情事实"
+
+
+class ReferenceRequest(BaseModel):
+    reference_text: str = Field(min_length=1)
+    reference_note: str = ""
+
+
 def _project_or_404(slug: str) -> None:
     try:
         agent.storage.require_project(slug)
@@ -76,6 +89,36 @@ def _apply_chapter_word_count(slug: str, options: GenerationOptions | None) -> N
     agent.storage.save_project_memory(slug, memory)
 
 
+def _project_status(slug: str) -> dict[str, Any]:
+    _project_or_404(slug)
+    setting = agent.storage.read_project_text(slug, "setting.md")
+    worldbuilding = agent.storage.read_project_text(slug, "worldbuilding.md")
+    outline = agent.storage.read_project_text(slug, "outline.md")
+    characters = agent.storage.load_project_json(slug, "characters.json")
+    has_setting = bool(setting.strip()) and "尚未生成" not in setting
+    has_worldbuilding = bool(worldbuilding.strip()) and "尚未生成" not in worldbuilding
+    has_outline = bool(outline.strip()) and "尚未生成" not in outline
+    has_characters = bool(characters.get("characters"))
+    missing = [
+        name
+        for name, ready in (
+            ("设定", has_setting),
+            ("人物", has_characters),
+            ("世界观", has_worldbuilding),
+            ("大纲", has_outline),
+        )
+        if not ready
+    ]
+    return {
+        "has_setting": has_setting,
+        "has_characters": has_characters,
+        "has_worldbuilding": has_worldbuilding,
+        "has_outline": has_outline,
+        "ready_for_chapters": not missing,
+        "missing": missing,
+    }
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     index_path = WEB_DIR / "index.html"
@@ -86,11 +129,15 @@ def index() -> str:
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
+    mode = "mock" if agent.config.mock else "real"
     return {
         "ok": True,
         "mock": agent.config.mock,
+        "mode": mode,
+        "mode_label": "Mock 模式" if agent.config.mock else "真实模型模式",
         "model": agent.config.openai_model,
         "novels_dir": str(agent.config.novels_dir.resolve()),
+        "api_key_configured": bool(agent.config.openai_api_key),
     }
 
 
@@ -130,7 +177,13 @@ def get_project(slug: str) -> dict[str, Any]:
         "outline": agent.storage.read_project_text(slug, "outline.md"),
         "characters": agent.storage.load_project_json(slug, "characters.json"),
         "chapters": _list_chapters(project_path),
+        "status": _project_status(slug),
     }
+
+
+@app.get("/api/projects/{slug}/status")
+def project_status(slug: str) -> dict[str, Any]:
+    return _project_status(slug)
 
 
 @app.post("/api/projects/{slug}/generate/{kind}")
@@ -150,6 +203,9 @@ def generate(slug: str, kind: str, options: GenerationOptions | None = Body(defa
         result = agent.generate_outline(slug)
         return {"kind": kind, **_path_payload(result["path"])}
     if kind == "first_chapter":
+        status = _project_status(slug)
+        if not status["ready_for_chapters"]:
+            raise HTTPException(status_code=400, detail="请先生成前置内容：" + "、".join(status["missing"]))
         result = agent.generate_chapter(slug, 1)
         return {
             "kind": kind,
@@ -160,10 +216,31 @@ def generate(slug: str, kind: str, options: GenerationOptions | None = Body(defa
     raise HTTPException(status_code=400, detail="kind must be one of: setting, characters, world, outline, first_chapter")
 
 
+@app.post("/api/projects/{slug}/initialize")
+def initialize_project(slug: str, options: GenerationOptions | None = Body(default=None)) -> dict[str, Any]:
+    _project_or_404(slug)
+    _apply_chapter_word_count(slug, options)
+    steps: list[dict[str, Any]] = []
+    for name, fn in (
+        ("setting", agent.generate_core_setting),
+        ("characters", agent.generate_characters),
+        ("world", agent.generate_worldbuilding),
+        ("outline", agent.generate_outline),
+    ):
+        result = fn(slug)
+        steps.append({"step": name, "path": str(result["path"].resolve())})
+    chapter = agent.generate_chapter(slug, 1)
+    steps.append({"step": "first_chapter", "path": str(chapter["path"].resolve())})
+    return {"project_name": slug, "message": "一键初始化完成。", "steps": steps}
+
+
 @app.post("/api/projects/{slug}/next")
 def generate_next_chapter(slug: str, options: GenerationOptions | None = Body(default=None)) -> dict[str, Any]:
     _project_or_404(slug)
     _apply_chapter_word_count(slug, options)
+    status = _project_status(slug)
+    if not status["ready_for_chapters"]:
+        raise HTTPException(status_code=400, detail="请先生成前置内容：" + "、".join(status["missing"]))
     try:
         result = agent.generate_next_chapter(slug)
     except ValueError as exc:
@@ -205,6 +282,56 @@ def read_chapter(slug: str, chapter_number: int) -> dict[str, Any]:
     return {"number": chapter_number, "content": content}
 
 
+@app.put("/api/projects/{slug}/chapters/{chapter_number}")
+def update_chapter(slug: str, chapter_number: int, payload: ChapterEditRequest) -> dict[str, Any]:
+    _project_or_404(slug)
+    result = agent.save_edited_chapter(slug, chapter_number, payload.content)
+    return {
+        "project_name": slug,
+        "chapter_number": chapter_number,
+        "path": str(result["chapter_path"].resolve()),
+        "message": f"第 {chapter_number} 章已保存并更新记忆。",
+    }
+
+
+@app.delete("/api/projects/{slug}/chapters/{chapter_number}")
+def delete_chapter(slug: str, chapter_number: int) -> dict[str, Any]:
+    _project_or_404(slug)
+    try:
+        path = agent.delete_chapter(slug, chapter_number)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Chapter not found: {chapter_number}") from exc
+    return {"project_name": slug, "chapter_number": chapter_number, "path": str(path.resolve()), "message": f"第 {chapter_number} 章已删除。"}
+
+
+@app.post("/api/projects/{slug}/chapters/{chapter_number}/rewrite")
+def rewrite_chapter(slug: str, chapter_number: int, payload: ChapterInstructionRequest) -> dict[str, Any]:
+    _project_or_404(slug)
+    result = agent.rewrite_chapter(slug, chapter_number, payload.instruction)
+    content = Path(result["path"]).read_text(encoding="utf-8")
+    return {
+        "project_name": slug,
+        "chapter_number": chapter_number,
+        "chapter_content": content,
+        "path": str(result["path"].resolve()),
+        "message": f"第 {chapter_number} 章已重写。",
+    }
+
+
+@app.post("/api/projects/{slug}/chapters/{chapter_number}/continue")
+def continue_chapter(slug: str, chapter_number: int) -> dict[str, Any]:
+    _project_or_404(slug)
+    result = agent.continue_chapter(slug, chapter_number)
+    content = Path(result["path"]).read_text(encoding="utf-8")
+    return {
+        "project_name": slug,
+        "chapter_number": chapter_number,
+        "chapter_content": content,
+        "path": str(result["path"].resolve()),
+        "message": f"第 {chapter_number} 章已续写。",
+    }
+
+
 @app.post("/api/projects/{slug}/export")
 def export_novel(slug: str) -> dict[str, str]:
     _project_or_404(slug)
@@ -217,6 +344,26 @@ def download_export(slug: str) -> FileResponse:
     _project_or_404(slug)
     path = agent.export_novel(slug)
     return FileResponse(path, media_type="text/markdown; charset=utf-8", filename=path.name)
+
+
+@app.post("/api/projects/{slug}/references")
+def save_reference_text(slug: str, payload: ReferenceRequest) -> dict[str, str]:
+    _project_or_404(slug)
+    path = agent.save_reference_text(slug, payload.reference_text, payload.reference_note)
+    return {"project_name": slug, "path": str(path.resolve()), "message": "参考文本已保存。"}
+
+
+@app.post("/api/projects/{slug}/references/analyze")
+def analyze_reference_text(slug: str, payload: ReferenceRequest) -> dict[str, str]:
+    _project_or_404(slug)
+    result = agent.analyze_reference_text(slug, payload.reference_text, payload.reference_note)
+    return {
+        "project_name": slug,
+        "reference_path": str(result["reference_path"].resolve()),
+        "analysis_path": str(result["analysis_path"].resolve()),
+        "analysis": result["analysis"],
+        "message": "参考分析已生成。输出将只借鉴抽象结构、节奏和技法。",
+    }
 
 
 @app.exception_handler(Exception)

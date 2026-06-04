@@ -63,6 +63,7 @@
           <button data-generate="outline" type="button">生成大纲</button>
           <button data-generate="first_chapter" type="button">生成第一章</button>
           <button id="generateNextChapter" type="button">生成下一章</button>
+          <button id="initializeProject" type="button">一键初始化</button>
           <button id="exportNovel" type="button">导出 Markdown</button>
         </div>
 
@@ -78,8 +79,37 @@
         </div>
 
         <section class="reader">
-          <h3 id="chapterTitle">章节正文</h3>
-          <article id="chapterContent">选择或生成章节后在这里查看。</article>
+          <h3 id="chapterTitle">编辑章节正文</h3>
+          <textarea id="chapterEditor" rows="18" aria-label="编辑章节">选择或生成章节后在这里查看。</textarea>
+          <div class="chapter-actions">
+            <button id="saveChapter" type="button">保存修改</button>
+            <button id="continueChapter" type="button">续写章节</button>
+            <button id="rewriteChapter" type="button">重写章节</button>
+            <button id="deleteChapter" class="danger" type="button">删除章节</button>
+          </div>
+          <label class="instruction">
+            重写要求
+            <input id="rewriteInstruction" value="加强冲突、减少解释、保持原有剧情事实" />
+          </label>
+        </section>
+
+        <section class="reference">
+          <h3>参考文本 / 改编辅助</h3>
+          <p class="notice">
+            只能上传自己有权使用的文本、公版文本，或用于合法分析的片段。不要要求系统直接复制、洗稿或照搬受版权保护作品。系统只提取结构、节奏、人物关系、主题和写作技巧，输出必须是原创内容。
+          </p>
+          <label>
+            参考说明
+            <input id="referenceNote" value="想参考节奏、人物关系、世界观复杂度、悬疑结构" />
+          </label>
+          <label>
+            参考文本
+            <textarea id="referenceText" rows="8" placeholder="在这里粘贴可合法分析的参考文本片段"></textarea>
+          </label>
+          <div class="chapter-actions">
+            <button id="saveReference" type="button">保存参考文本</button>
+            <button id="analyzeReference" type="button">分析参考文本</button>
+          </div>
         </section>
       </section>
     </main>

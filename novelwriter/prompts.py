@@ -146,6 +146,63 @@ CHARACTERS_JSON:
 """
 
 
+def chapter_plan_prompt(
+    profile: dict[str, Any],
+    outline: str,
+    chapter_outline: str,
+    memory: dict[str, Any],
+    previous_summary: str,
+    chapter_number: int,
+    reference_analysis: str = "",
+) -> str:
+    target_words = int(profile.get("words_per_chapter") or 3000)
+    return f"""[TASK:CHAPTER_PLAN]
+CHAPTER_NUMBER: {chapter_number}
+请先为第 {chapter_number} 章生成本章计划。只输出合法 JSON，不要输出 Markdown 代码块。
+
+计划目标：
+- 本章正文目标字数约 {target_words} 字。
+- 每章必须推进一个新事件，产生新的冲突、线索或反转。
+- 不得重复上一章主要场景、开头描写、已发生事件、已发现线索或同一段冲突。
+- 不得让角色重新发现已经发现过的信息。
+- 不得使用“主角”“{profile.get("genre", "")}故事”等出戏表达。
+- 结尾必须有新的钩子。
+
+原创性要求：
+- 如有参考分析，只借鉴抽象结构、节奏和技法。
+- 不要照搬参考文本，不要复刻角色名、地名、独特设定或具体情节。
+
+PROFILE_JSON:
+{_json(profile)}
+
+FULL_OUTLINE:
+{outline}
+
+CURRENT_CHAPTER_OUTLINE:
+{chapter_outline}
+
+MEMORY_JSON:
+{_json(memory)}
+
+PREVIOUS_CHAPTER_SUMMARY:
+{previous_summary}
+
+REFERENCE_ANALYSIS:
+{reference_analysis}
+
+输出 JSON schema:
+{{
+  "chapter_goal": "本章目标",
+  "new_event": "本章新事件",
+  "conflict": "本章冲突",
+  "clues": ["新线索"],
+  "foreshadowing": ["新伏笔"],
+  "ending_hook": "结尾钩子",
+  "avoid_repetition": ["本章必须避免重复的内容"]
+}}
+"""
+
+
 def chapter_generation_prompt(
     profile: dict[str, Any],
     setting: str,
@@ -156,6 +213,8 @@ def chapter_generation_prompt(
     memory: dict[str, Any],
     previous_summary: str,
     chapter_number: int,
+    chapter_plan: dict[str, Any] | None = None,
+    reference_analysis: str = "",
 ) -> str:
     target_words = int(profile.get("words_per_chapter") or 3000)
     return f"""[TASK:CHAPTER]
@@ -170,6 +229,11 @@ CHAPTER_NUMBER: {chapter_number}
 5. 不要制造与既有记忆冲突的新设定。
 6. 如新增伏笔、地点、人物、事件，必须在对应字段登记。
 7. 本章正文目标字数约 {target_words} 字，请尽量贴近该篇幅并保持节奏完整。
+8. 不得重复上一章主要场景、已发生事件、已发现线索或上一章开头描写。
+9. 不得让角色重新发现已经发现过的信息，不得重复同一段冲突。
+10. 不得使用“主角”“{profile.get("genre", "")}故事”等出戏表达，要直接使用角色姓名和故事内语言。
+11. 每章必须推进一个新事件，产生新的冲突、线索或反转，结尾必须有新的钩子。
+12. 参考文本只允许借鉴抽象结构、节奏和技法，不得照搬原文、角色名、地名、独特设定或具体情节。
 
 PROFILE_JSON:
 {_json(profile)}
@@ -195,6 +259,12 @@ MEMORY_JSON:
 PREVIOUS_CHAPTER_SUMMARY:
 {previous_summary}
 
+CHAPTER_PLAN_JSON:
+{_json(chapter_plan or {})}
+
+REFERENCE_ANALYSIS:
+{reference_analysis}
+
 输出 JSON schema:
 {{
   "chapter_title": "章节标题",
@@ -207,8 +277,44 @@ PREVIOUS_CHAPTER_SUMMARY:
   "relationship_changes": [],
   "world_updates": {{"rules": [], "timeline": [], "locations": [], "factions": [], "systems": [], "taboos": []}},
   "events": [],
+  "discovered_clues": [],
+  "current_plot_position": "当前剧情进度",
+  "forbidden_repetition_notes": [],
   "quality_notes": []
 }}
+"""
+
+
+def reference_analysis_prompt(profile: dict[str, Any], reference_text: str, reference_note: str) -> str:
+    return f"""[TASK:REFERENCE_ANALYSIS]
+请分析用户提供的参考文本，输出 Markdown 报告。
+
+版权与原创性要求：
+- 用户只能上传自己有权使用的文本、公版文本，或用于合法分析的片段。
+- 不要复制、洗稿或照搬受版权保护作品。
+- 只提取结构、节奏、人物关系、主题和写作技巧。
+- 后续输出必须是原创内容。
+- 不要复刻角色名、地名、独特设定、具体情节或原文句子。
+
+PROFILE_JSON:
+{_json(profile)}
+
+REFERENCE_NOTE:
+{reference_note}
+
+REFERENCE_TEXT:
+{reference_text[:12000]}
+
+报告必须包含：
+- 题材类型
+- 叙事节奏
+- 章节结构
+- 人物关系模式
+- 冲突设计
+- 悬念设计
+- 爽点/钩子
+- 可借鉴方向
+- 必须避免直接复制的元素
 """
 
 

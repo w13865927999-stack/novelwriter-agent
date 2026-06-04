@@ -41,6 +41,13 @@ def default_memory(project: dict[str, Any]) -> dict[str, Any]:
             "resolved_foreshadowing": [],
         },
         "chapter_summaries": {},
+        "occurred_events": [],
+        "discovered_clues": [],
+        "unresolved_hooks": [],
+        "resolved_hooks": [],
+        "character_changes": [],
+        "current_plot_position": "尚未开始正文。",
+        "forbidden_repetition_notes": [],
         "relationship_changes": [],
         "style_notes": [],
         "quality_issues": [],
@@ -125,7 +132,13 @@ def apply_chapter_update(
                 _append_unique(world.setdefault(key, []), values)
 
     plot = memory.setdefault("plot", {})
-    _append_unique(plot.setdefault("events", []), update.get("events", []) or [])
+    events = update.get("events", []) or []
+    _append_unique(plot.setdefault("events", []), events)
+    _append_unique(memory.setdefault("occurred_events", []), events)
+
+    clues = update.get("discovered_clues", []) or update.get("new_clues", []) or []
+    _append_unique(memory.setdefault("discovered_clues", []), clues)
+
     _append_unique(
         plot.setdefault("open_foreshadowing", []),
         update.get("new_foreshadowing", []) or [],
@@ -133,14 +146,51 @@ def apply_chapter_update(
     resolved = update.get("resolved_foreshadowing", []) or []
     _append_unique(plot.setdefault("resolved_foreshadowing", []), resolved)
     _remove_by_key(plot.setdefault("open_foreshadowing", []), resolved)
+    _append_unique(memory.setdefault("unresolved_hooks", []), update.get("new_foreshadowing", []) or update.get("unresolved_hooks", []) or [])
+    _append_unique(memory.setdefault("resolved_hooks", []), resolved or update.get("resolved_hooks", []) or [])
+    _remove_by_key(memory.setdefault("unresolved_hooks", []), resolved or update.get("resolved_hooks", []) or [])
 
     relationships = update.get("relationship_changes", []) or []
     for change in relationships:
         if isinstance(change, dict):
             change.setdefault("chapter", chapter_number)
     _append_unique(memory.setdefault("relationship_changes", []), relationships)
+    _append_unique(memory.setdefault("character_changes", []), relationships + (update.get("character_changes", []) or []))
+
+    if update.get("current_plot_position"):
+        memory["current_plot_position"] = update["current_plot_position"]
+    elif summary:
+        memory["current_plot_position"] = f"第 {chapter_number} 章结束：{summary}"
+
+    _append_unique(memory.setdefault("forbidden_repetition_notes", []), update.get("forbidden_repetition_notes", []) or [])
 
     quality_notes = update.get("quality_notes", []) or []
     _append_unique(memory.setdefault("quality_issues", []), quality_notes)
     return memory
 
+
+def remove_chapter_memory(memory: dict[str, Any], chapter_number: int) -> dict[str, Any]:
+    """Remove chapter-scoped memory after deleting a chapter file."""
+
+    memory.setdefault("chapter_summaries", {}).pop(str(chapter_number), None)
+
+    def keep(item: Any) -> bool:
+        return not (isinstance(item, dict) and int(item.get("chapter", -1)) == chapter_number)
+
+    for key in ("occurred_events", "discovered_clues", "unresolved_hooks", "resolved_hooks", "character_changes", "relationship_changes"):
+        if isinstance(memory.get(key), list):
+            memory[key] = [item for item in memory[key] if keep(item)]
+
+    plot = memory.setdefault("plot", {})
+    for key in ("events", "open_foreshadowing", "resolved_foreshadowing"):
+        if isinstance(plot.get(key), list):
+            plot[key] = [item for item in plot[key] if keep(item)]
+
+    summaries = memory.get("chapter_summaries", {})
+    memory["current_chapter"] = max([int(k) for k in summaries.keys()] or [0])
+    if summaries:
+        last = str(memory["current_chapter"])
+        memory["current_plot_position"] = f"第 {last} 章结束：{summaries.get(last, '')}"
+    else:
+        memory["current_plot_position"] = "尚未开始正文。"
+    return memory

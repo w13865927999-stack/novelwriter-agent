@@ -49,9 +49,8 @@ class AppConfig:
             openai_api_key=api_key,
             openai_base_url=os.getenv("OPENAI_BASE_URL", "").strip(),
             openai_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini",
-            mock=mock or not bool(api_key),
+            mock=mock,
             temperature=float(os.getenv("NOVELWRITER_TEMPERATURE", "0.8")),
             max_tokens=int(os.getenv("NOVELWRITER_MAX_TOKENS", "4096")),
             novels_dir=novels_dir,
         )
-

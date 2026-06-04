@@ -1,5 +1,6 @@
 const state = {
   activeSlug: "",
+  currentChapterNumber: null,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -8,7 +9,7 @@ const projectSelect = $("#projectSelect");
 const activeProject = $("#activeProject");
 const chaptersEl = $("#chapters");
 const chapterTitle = $("#chapterTitle");
-const chapterContent = $("#chapterContent");
+const chapterEditor = $("#chapterEditor");
 
 function setOutput(value) {
   output.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
@@ -40,7 +41,7 @@ async function loadHealth() {
   const data = await request("/api/health");
   $("#health").textContent = data.mock
     ? "Mock 模式运行中，无需 API Key"
-    : `模型：${data.model}`;
+    : `真实模型模式：${data.model}${data.api_key_configured ? "" : "（缺少 API Key）"}`;
 }
 
 async function loadProjects(selectSlug = "") {
@@ -56,6 +57,7 @@ async function loadProjects(selectSlug = "") {
     state.activeSlug = "";
     activeProject.textContent = "未选择项目";
     chaptersEl.innerHTML = "";
+    state.currentChapterNumber = null;
     return;
   }
 
@@ -80,6 +82,7 @@ async function loadProject(slug) {
   renderChapters(data.chapters || []);
   setOutput({
     title: project.title,
+    status: data.status,
     settingReady: Boolean(data.setting && !data.setting.includes("尚未生成")),
     characters: (data.characters.characters || []).length,
     outlineReady: Boolean(data.outline && !data.outline.includes("尚未生成")),
@@ -105,8 +108,9 @@ function renderChapters(chapters) {
 
 async function loadChapter(number) {
   const data = await request(`/api/projects/${state.activeSlug}/chapters/${number}`);
+  state.currentChapterNumber = data.number;
   chapterTitle.textContent = `第 ${data.number} 章`;
-  chapterContent.textContent = data.content;
+  chapterEditor.value = data.content;
 }
 
 async function withBusy(button, task) {
@@ -193,8 +197,130 @@ $("#generateNextChapter").addEventListener("click", async () => {
     await loadProject(state.activeSlug);
     if (data.chapter_number) {
       chapterTitle.textContent = data.chapter_title || `第 ${data.chapter_number} 章`;
-      chapterContent.textContent = data.chapter_content || "章节已生成。";
+      state.currentChapterNumber = data.chapter_number;
+      chapterEditor.value = data.chapter_content || "章节已生成。";
     }
+  });
+});
+
+$("#initializeProject").addEventListener("click", async () => {
+  if (!state.activeSlug) {
+    setOutput("请先创建或选择项目。");
+    return;
+  }
+  await withBusy($("#initializeProject"), async () => {
+    const data = await request(`/api/projects/${state.activeSlug}/initialize`, {
+      method: "POST",
+      body: JSON.stringify(generationPayload()),
+    });
+    setOutput(data);
+    await loadProject(state.activeSlug);
+    await loadChapter(1);
+  });
+});
+
+$("#saveChapter").addEventListener("click", async () => {
+  if (!state.activeSlug || !state.currentChapterNumber) {
+    setOutput("请先选择章节。");
+    return;
+  }
+  await withBusy($("#saveChapter"), async () => {
+    const data = await request(`/api/projects/${state.activeSlug}/chapters/${state.currentChapterNumber}`, {
+      method: "PUT",
+      body: JSON.stringify({ content: chapterEditor.value }),
+    });
+    setOutput(data);
+    await loadProject(state.activeSlug);
+  });
+});
+
+$("#deleteChapter").addEventListener("click", async () => {
+  if (!state.activeSlug || !state.currentChapterNumber) {
+    setOutput("请先选择章节。");
+    return;
+  }
+  if (!window.confirm(`确认删除第 ${state.currentChapterNumber} 章？此操作会删除 Markdown 文件。`)) {
+    return;
+  }
+  await withBusy($("#deleteChapter"), async () => {
+    const data = await request(`/api/projects/${state.activeSlug}/chapters/${state.currentChapterNumber}`, {
+      method: "DELETE",
+    });
+    setOutput(data);
+    state.currentChapterNumber = null;
+    chapterTitle.textContent = "章节正文";
+    chapterEditor.value = "选择或生成章节后在这里查看。";
+    await loadProject(state.activeSlug);
+  });
+});
+
+$("#rewriteChapter").addEventListener("click", async () => {
+  if (!state.activeSlug || !state.currentChapterNumber) {
+    setOutput("请先选择章节。");
+    return;
+  }
+  if (!window.confirm(`确认覆盖重写第 ${state.currentChapterNumber} 章？`)) {
+    return;
+  }
+  await withBusy($("#rewriteChapter"), async () => {
+    const instruction = $("#rewriteInstruction").value || "加强冲突、减少解释、保持原有剧情事实";
+    const data = await request(`/api/projects/${state.activeSlug}/chapters/${state.currentChapterNumber}/rewrite`, {
+      method: "POST",
+      body: JSON.stringify({ instruction }),
+    });
+    setOutput(data);
+    chapterEditor.value = data.chapter_content || chapterEditor.value;
+    await loadProject(state.activeSlug);
+  });
+});
+
+$("#continueChapter").addEventListener("click", async () => {
+  if (!state.activeSlug || !state.currentChapterNumber) {
+    setOutput("请先选择章节。");
+    return;
+  }
+  await withBusy($("#continueChapter"), async () => {
+    const data = await request(`/api/projects/${state.activeSlug}/chapters/${state.currentChapterNumber}/continue`, {
+      method: "POST",
+    });
+    setOutput(data);
+    chapterEditor.value = data.chapter_content || chapterEditor.value;
+    await loadProject(state.activeSlug);
+  });
+});
+
+function referencePayload() {
+  return {
+    reference_text: $("#referenceText").value,
+    reference_note: $("#referenceNote").value,
+  };
+}
+
+$("#saveReference").addEventListener("click", async () => {
+  if (!state.activeSlug) {
+    setOutput("请先创建或选择项目。");
+    return;
+  }
+  await withBusy($("#saveReference"), async () => {
+    const data = await request(`/api/projects/${state.activeSlug}/references`, {
+      method: "POST",
+      body: JSON.stringify(referencePayload()),
+    });
+    setOutput(data);
+  });
+});
+
+$("#analyzeReference").addEventListener("click", async () => {
+  if (!state.activeSlug) {
+    setOutput("请先创建或选择项目。");
+    return;
+  }
+  await withBusy($("#analyzeReference"), async () => {
+    const data = await request(`/api/projects/${state.activeSlug}/references/analyze`, {
+      method: "POST",
+      body: JSON.stringify(referencePayload()),
+    });
+    setOutput(data);
   });
 });
 

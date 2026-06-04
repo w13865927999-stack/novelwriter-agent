@@ -18,6 +18,8 @@ class LLMClient:
     def generate(self, prompt: str, system_prompt: str = SYSTEM_PROMPT, temperature: float | None = None) -> str:
         if self.config.mock:
             return self._mock_generate(prompt)
+        if not self.config.openai_api_key:
+            raise RuntimeError("真实模型模式需要 OPENAI_API_KEY。请在本地 .env 或云端 secrets 中配置，不要提交密钥。")
 
         try:
             from openai import OpenAI
@@ -192,6 +194,38 @@ class LLMClient:
             chapter_number = self._extract_chapter_number(prompt)
             return self._mock_chapter_json(title, genre, protagonist, style, chapter_number)
 
+        if "[TASK:CHAPTER_PLAN]" in prompt:
+            chapter_number = self._extract_chapter_number(prompt)
+            return json.dumps(
+                {
+                    "chapter_goal": f"推进第{chapter_number}条新线索，让{protagonist}离核心真相更近一步。",
+                    "new_event": f"{protagonist}离开旧场景，进入第{chapter_number}个关键地点调查新异常。",
+                    "conflict": "同伴隐瞒真相与外部势力阻拦同时升级。",
+                    "clues": [f"第{chapter_number}章新增线索，不重复已发现信息"],
+                    "foreshadowing": [f"第{chapter_number}章新伏笔"],
+                    "ending_hook": f"结尾出现一个与第{chapter_number + 1}章直接相连的新钩子。",
+                    "avoid_repetition": ["不回到第七码头重复发现徽章", "不重复生日刻痕", "不重复同一段白塔封锁冲突"],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+
+        if "[TASK:REFERENCE_ANALYSIS]" in prompt:
+            return (
+                "# 参考文本分析报告\n\n"
+                "## 版权与原创性边界\n"
+                "- 只借鉴抽象结构、节奏和技法，不复制原文、角色名、地名、独特设定或具体桥段。\n\n"
+                "## 题材类型\n- 待用户提供更完整文本后细化。\n\n"
+                "## 叙事节奏\n- 以问题推进场景，以钩子结束章节。\n\n"
+                "## 章节结构\n- 开场抛出异常，中段升级冲突，结尾留下新问题。\n\n"
+                "## 人物关系模式\n- 让信任、隐瞒和利益交换推动关系变化。\n\n"
+                "## 冲突设计\n- 外部阻碍与内部选择同时出现。\n\n"
+                "## 悬念设计\n- 线索逐步递进，不让角色重复发现同一信息。\n\n"
+                "## 爽点/钩子\n- 每章至少出现一个新发现、反转或危险承诺。\n\n"
+                "## 可借鉴方向\n- 借鉴节奏层级和冲突密度。\n\n"
+                "## 必须避免直接复制的元素\n- 原文句子、专有名词、角色关系、独特设定和具体情节均不可复用。\n"
+            )
+
         if "[TASK:CONTINUE_CHAPTER]" in prompt:
             chapter_number = self._extract_chapter_number(prompt)
             return json.dumps(
@@ -274,25 +308,24 @@ class LLMClient:
         prefix = "重写版：" if rewritten else ""
         body = (
             f"# 第{chapter_number}章 {chapter_title}\n\n"
-            f"{prefix}雾港的雨从凌晨下到黄昏，像有人把整座城市浸在一只灰色玻璃杯里。"
-            f"{protagonist}站在第七码头的警戒线外，听见黑匣钥匙在口袋里轻轻震动。\n\n"
-            "震动只持续了三秒，却足够让周围的声音全部退远。货柜之间残留着一圈焦黑的水痕，"
-            "水痕中央躺着一枚被烧弯的白塔徽章。按照白塔理事会的公告，这里昨夜什么都没有发生。\n\n"
-            f"沈砚把伞压低，语气平静得近乎冷酷：“如果你现在离开，{genre}故事还能停在传闻阶段。”\n\n"
-            f"{protagonist}没有动。主角想起自己收到的那条匿名消息：别相信白塔，别打开黑匣。"
-            "可钥匙的温度还在升高，像是在催促一个已经迟到十年的答案。\n\n"
-            "冲突很快到来。两名白塔执勤者穿过雨幕，要求他们交出现场照片。沈砚上前周旋，"
-            f"{protagonist}趁机蹲下身，在水痕边缘发现了一串细小刻痕：那不是编号，而是自己的生日。\n\n"
-            "远处汽笛响起，黑市信使乔梨从货柜后探出半张脸，声音发抖：“你们要找的名单不在白塔，"
-            "在一个死人手里。”\n\n"
-            f"{protagonist}抬头时，白塔徽章忽然裂开，里面滚出一滴鲜红的蜡。蜡面凝固成一个字：回。"
-            "下一刻，码头所有灯同时熄灭，有人在黑暗里准确叫出了主角的名字。"
+            f"{prefix}{protagonist}没有再回第七码头。\n\n"
+            f"第{chapter_number}天清晨，回响罗盘把他带到雾港高架下的旧电车站。站台早已停运，"
+            "广告屏却在无人供电的情况下亮着一行白字：名单正在改写。\n\n"
+            "沈砚拦住他，第一次没有用讥讽掩饰紧张：“这不是旧线索的残影，是有人刚刚动过手。”\n\n"
+            f"{protagonist}打开黑匣钥匙，钥匙没有发热，而是渗出一段陌生的儿童歌声。"
+            "歌声指向站台尽头的储物柜，柜门里没有尸体，没有徽章，只有一张被剪去半边的车票。\n\n"
+            f"车票背面写着新的地点：第{chapter_number}环记忆中转站。"
+            "白塔的人随后赶到，这次他们不是封锁现场，而是直接宣布沈砚为叛逃者。\n\n"
+            f"{protagonist}必须在带走车票和救下沈砚之间做选择。乔梨从通讯器里喊他别犹豫，"
+            "因为黑市刚刚放出消息：名单上的第二个人还活着，而且正在找他。\n\n"
+            "他撕下车票编号，把原票塞进沈砚掌心，转身冲进检修通道。身后的广播忽然恢复，"
+            f"用一个陌生孩子的声音播报：“第{chapter_number}次回响开始，下一站，旧城事故现场。”"
         )
         return json.dumps(
             {
                 "chapter_title": chapter_title,
                 "chapter_markdown": body,
-                "summary": f"第{chapter_number}章：{protagonist}在第七码头发现白塔隐瞒的异常痕迹，线索指向自己的过去。",
+                "summary": f"第{chapter_number}章：{protagonist}在旧电车站获得新车票线索，白塔宣布沈砚为叛逃者，名单第二人仍然活着。",
                 "new_characters": [
                     {
                         "name": "乔梨",
@@ -307,8 +340,8 @@ class LLMClient:
                 if chapter_number == 1
                 else [],
                 "new_foreshadowing": [
-                    {"id": f"key-echo-{chapter_number}", "description": f"黑匣钥匙在第{chapter_number}章出现异常回响"},
-                    {"id": f"name-in-dark-{chapter_number}", "description": "黑暗里有人准确叫出主角名字"},
+                    {"id": f"ticket-{chapter_number}", "description": f"第{chapter_number}章出现指向记忆中转站的半张车票"},
+                    {"id": f"second-person-{chapter_number}", "description": "名单上的第二个人仍然活着并正在寻找主角"},
                 ],
                 "resolved_foreshadowing": [],
                 "relationship_changes": [
@@ -323,9 +356,15 @@ class LLMClient:
                     "taboos": [],
                 },
                 "events": [
-                    {"chapter": chapter_number, "event": "主角发现白塔徽章和生日刻痕"},
-                    {"chapter": chapter_number, "event": "乔梨透露名单在死人手里"},
+                    {"chapter": chapter_number, "event": "主角在旧电车站发现新的车票线索"},
+                    {"chapter": chapter_number, "event": "白塔宣布沈砚为叛逃者"},
                 ],
+                "discovered_clues": [
+                    {"chapter": chapter_number, "clue": f"第{chapter_number}环记忆中转站"},
+                    {"chapter": chapter_number, "clue": "名单第二人仍然活着"},
+                ],
+                "current_plot_position": f"第{chapter_number}章结束：调查从码头旧案推进到记忆中转站与名单第二人。",
+                "forbidden_repetition_notes": ["不要再重复第七码头、白塔徽章、生日刻痕、死人名单初次出现。"],
                 "quality_notes": [],
             },
             ensure_ascii=False,

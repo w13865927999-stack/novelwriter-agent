@@ -135,6 +135,23 @@ class Storage:
             raise FileNotFoundError(f"找不到第 {chapter_number} 章：{path}")
         return path.read_text(encoding="utf-8")
 
+    def delete_chapter(self, slug: str, chapter_number: int) -> Path:
+        path = self.chapter_path(slug, chapter_number)
+        if not path.exists():
+            raise FileNotFoundError(f"找不到第 {chapter_number} 章：{path}")
+        path.unlink()
+        return path
+
+    def list_chapter_numbers(self, slug: str) -> list[int]:
+        chapter_dir = self.require_project(slug) / "chapters"
+        numbers: list[int] = []
+        for path in sorted(chapter_dir.glob("chapter_*.md")):
+            try:
+                numbers.append(int(path.stem.replace("chapter_", "")))
+            except ValueError:
+                continue
+        return numbers
+
     def append_log(self, slug: str, name: str, content: str) -> Path:
         log_dir = self.require_project(slug) / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -174,4 +191,3 @@ class Storage:
     def write_text(path: Path, content: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
-

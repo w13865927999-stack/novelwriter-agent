@@ -9,11 +9,12 @@ from typing import Any
 
 from .config import AppConfig
 from .llm import LLMClient
-from .memory import apply_chapter_update, apply_character_cards, apply_worldbuilding_seed
+from .memory import apply_chapter_update, apply_character_cards, apply_worldbuilding_seed, remove_chapter_memory
 from .models import NovelProject
 from .prompts import (
     SYSTEM_PROMPT,
     chapter_generation_prompt,
+    chapter_plan_prompt,
     characters_prompt,
     continue_chapter_prompt,
     core_setting_prompt,
@@ -21,6 +22,7 @@ from .prompts import (
     outline_prompt,
     polish_chapter_prompt,
     quality_check_prompt,
+    reference_analysis_prompt,
     rewrite_chapter_prompt,
     worldbuilding_prompt,
 )
@@ -123,8 +125,52 @@ class NovelWriterAgent:
         self.storage.append_log(slug, "generate-outline", response)
         return {"path": path, "data": response}
 
-    def generate_chapter(self, slug: str, chapter_number: int) -> dict[str, Any]:
+    def ensure_generation_ready(self, slug: str) -> None:
+        missing: list[str] = []
+        if "尚未生成" in self.storage.read_project_text(slug, "setting.md"):
+            missing.append("设定")
+        characters = self.storage.load_project_json(slug, "characters.json")
+        if not characters.get("characters"):
+            missing.append("人物")
+        if "尚未生成" in self.storage.read_project_text(slug, "worldbuilding.md"):
+            missing.append("世界观")
+        if "尚未生成" in self.storage.read_project_text(slug, "outline.md"):
+            missing.append("大纲")
+        if missing:
+            raise ValueError("请先生成前置内容：" + "、".join(missing))
+
+    def generate_chapter_plan(self, slug: str, chapter_number: int) -> dict[str, Any]:
         context = self._chapter_context(slug, chapter_number)
+        response = self.llm.generate(
+            chapter_plan_prompt(
+                context["profile"],
+                context["outline"],
+                context["chapter_outline"],
+                context["memory"],
+                context["previous_summary"],
+                chapter_number,
+                context["reference_analysis"],
+            ),
+            SYSTEM_PROMPT,
+        )
+        plan = self._json_or_default(response, {})
+        if not plan:
+            plan = {
+                "chapter_goal": f"推进第 {chapter_number} 章剧情。",
+                "new_event": "产生一个新事件。",
+                "conflict": "制造新的阻碍和选择。",
+                "clues": [],
+                "foreshadowing": [],
+                "ending_hook": "留下新钩子。",
+                "avoid_repetition": [],
+            }
+        self.storage.append_log(slug, f"chapter-{chapter_number:03d}-plan", self._log_payload("章节计划", response, plan))
+        return plan
+
+    def generate_chapter(self, slug: str, chapter_number: int) -> dict[str, Any]:
+        self.ensure_generation_ready(slug)
+        context = self._chapter_context(slug, chapter_number)
+        context["chapter_plan"] = self.generate_chapter_plan(slug, chapter_number)
         prompt = chapter_generation_prompt(**context)
         response = self.llm.generate(prompt, SYSTEM_PROMPT)
         payload = self._json_or_default(response, {})
@@ -136,12 +182,37 @@ class NovelWriterAgent:
             }
 
         chapter_text = payload.get("chapter_markdown") or response.strip()
+        memory_before_save = self.storage.load_project_memory(slug)
+        recent_chapters = self._recent_chapters(slug, chapter_number)
+        quality = heuristic_quality_scan(context["profile"], context["chapter_outline"], chapter_text, memory_before_save, recent_chapters)
+        if quality.get("repetition_warning"):
+            retry_prompt = (
+                prompt
+                + "\n\nREWRITE_TO_AVOID_REPETITION:\n"
+                + "\n".join(quality.get("repetition_issues", []))
+                + "\n请完全避开上述重复问题，重写本章正文和记忆更新。"
+            )
+            retry_response = self.llm.generate(retry_prompt, SYSTEM_PROMPT)
+            retry_payload = self._json_or_default(retry_response, {})
+            retry_text = (retry_payload.get("chapter_markdown") if retry_payload else "") or retry_response.strip()
+            retry_quality = heuristic_quality_scan(
+                context["profile"],
+                context["chapter_outline"],
+                retry_text,
+                memory_before_save,
+                recent_chapters,
+            )
+            if not retry_quality.get("repetition_warning") or retry_quality.get("similarity_to_recent", 1) <= quality.get("similarity_to_recent", 1):
+                response = retry_response
+                payload = retry_payload or {"chapter_title": f"第{chapter_number}章", "chapter_markdown": retry_text, "summary": ""}
+                chapter_text = retry_text
+                quality = retry_quality
+
         chapter_path = self.storage.save_chapter(slug, chapter_number, chapter_text)
         memory = self.storage.load_project_memory(slug)
         apply_chapter_update(memory, chapter_number, payload)
         self.storage.save_project_memory(slug, memory)
 
-        quality = heuristic_quality_scan(context["profile"], context["chapter_outline"], chapter_text, memory)
         self.storage.append_log(slug, f"chapter-{chapter_number:03d}-generation", self._log_payload("章节生成", response, payload))
         self.storage.append_log(slug, f"chapter-{chapter_number:03d}-quality", json.dumps(quality, ensure_ascii=False, indent=2))
         return {"path": chapter_path, "data": payload, "quality": quality}
@@ -201,10 +272,53 @@ class NovelWriterAgent:
         self.storage.append_log(slug, f"chapter-{chapter_number:03d}-memory-update", self._log_payload("记忆更新", response, payload))
         return {"path": self.storage.require_project(slug) / "memory.json", "data": payload}
 
+    def save_edited_chapter(self, slug: str, chapter_number: int, content: str) -> dict[str, Any]:
+        chapter_path = self.storage.save_chapter(slug, chapter_number, content)
+        memory_result = self.update_memory_from_chapter(slug, chapter_number)
+        memory_result["chapter_path"] = chapter_path
+        return memory_result
+
+    def delete_chapter(self, slug: str, chapter_number: int) -> Path:
+        path = self.storage.delete_chapter(slug, chapter_number)
+        memory = self.storage.load_project_memory(slug)
+        remove_chapter_memory(memory, chapter_number)
+        self.storage.save_project_memory(slug, memory)
+        self.storage.append_log(slug, f"chapter-{chapter_number:03d}-delete", f"Deleted chapter {chapter_number}: {path}")
+        return path
+
+    def save_reference_text(self, slug: str, reference_text: str, reference_note: str = "") -> Path:
+        project_path = self.storage.require_project(slug)
+        reference_dir = project_path / "references"
+        reference_dir.mkdir(parents=True, exist_ok=True)
+        path = reference_dir / "reference_text.md"
+        content = (
+            "# 参考文本\n\n"
+            "## 使用说明\n"
+            f"{reference_note.strip()}\n\n"
+            "## 文本\n"
+            f"{reference_text.strip()}\n"
+        )
+        self.storage.write_text(path, content)
+        return path
+
+    def analyze_reference_text(self, slug: str, reference_text: str, reference_note: str = "") -> dict[str, Any]:
+        profile = self._profile(slug)
+        reference_path = self.save_reference_text(slug, reference_text, reference_note)
+        response = self.llm.generate(reference_analysis_prompt(profile, reference_text, reference_note), SYSTEM_PROMPT)
+        analysis_path = self.storage.write_project_text(slug, "reference_analysis.md", response.strip() + "\n")
+        self.storage.append_log(slug, "reference-analysis", response)
+        return {"reference_path": reference_path, "analysis_path": analysis_path, "analysis": response}
+
     def check_chapter(self, slug: str, chapter_number: int) -> dict[str, Any]:
         context = self._chapter_context(slug, chapter_number)
         chapter_text = self.storage.read_chapter(slug, chapter_number)
-        heuristic = heuristic_quality_scan(context["profile"], context["chapter_outline"], chapter_text, context["memory"])
+        heuristic = heuristic_quality_scan(
+            context["profile"],
+            context["chapter_outline"],
+            chapter_text,
+            context["memory"],
+            self._recent_chapters(slug, chapter_number),
+        )
         response = self.llm.generate(
             quality_check_prompt(
                 context["profile"],
@@ -235,6 +349,7 @@ class NovelWriterAgent:
         outline = self.storage.read_project_text(slug, "outline.md")
         memory = self.storage.load_project_memory(slug)
         previous_summary = memory.get("chapter_summaries", {}).get(str(chapter_number - 1), "")
+        reference_analysis = self.storage.read_project_text(slug, "reference_analysis.md")
         return {
             "profile": profile,
             "setting": setting,
@@ -245,7 +360,17 @@ class NovelWriterAgent:
             "memory": memory,
             "previous_summary": previous_summary,
             "chapter_number": chapter_number,
+            "reference_analysis": reference_analysis,
         }
+
+    def _recent_chapters(self, slug: str, chapter_number: int, limit: int = 3) -> list[dict[str, Any]]:
+        recent: list[dict[str, Any]] = []
+        for number in range(max(1, chapter_number - limit), chapter_number):
+            try:
+                recent.append({"number": number, "content": self.storage.read_chapter(slug, number)})
+            except FileNotFoundError:
+                continue
+        return recent
 
     @staticmethod
     def extract_chapter_outline(outline: str, chapter_number: int) -> str:
@@ -322,4 +447,3 @@ class NovelWriterAgent:
             "## Raw\n\n"
             f"```text\n{raw}\n```\n"
         )
-

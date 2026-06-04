@@ -151,7 +151,8 @@ button:disabled {
 }
 
 pre,
-article {
+article,
+#chapterEditor {
   background: #f8fafc;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -191,10 +192,35 @@ pre {
   margin-top: 18px;
 }
 
+#chapterEditor,
 article {
   min-height: 320px;
   padding: 18px;
   white-space: pre-wrap;
+}
+
+#chapterEditor {
+  width: 100%;
+}
+
+.chapter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.danger {
+  background: #b42318;
+}
+
+.danger:hover {
+  background: #8f1b13;
+}
+
+.instruction,
+.reference {
+  margin-top: 16px;
 }
 
 .notice {
@@ -214,4 +240,3 @@ article {
     flex-direction: column;
   }
 }
-
