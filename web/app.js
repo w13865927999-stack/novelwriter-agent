@@ -5,6 +5,7 @@ const state = {
 
 const $ = (selector) => document.querySelector(selector);
 const output = $("#output");
+const debugOutput = $("#debugOutput");
 const projectSelect = $("#projectSelect");
 const activeProject = $("#activeProject");
 const chaptersEl = $("#chapters");
@@ -12,7 +13,42 @@ const chapterTitle = $("#chapterTitle");
 const chapterEditor = $("#chapterEditor");
 
 function setOutput(value) {
-  output.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  output.textContent = typeof value === "string" ? value : JSON.stringify(cleanDisplayPayload(value), null, 2);
+}
+
+function setDebug(value) {
+  if (!debugOutput) return;
+  debugOutput.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+}
+
+function cleanDisplayPayload(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const hiddenKeys = new Set(["chapter_content", "chapter_text", "memory_update"]);
+  const cleaned = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (!hiddenKeys.has(key)) {
+      cleaned[key] = item;
+    }
+  }
+  return cleaned;
+}
+
+function normalizeChapterText(value) {
+  if (typeof value !== "string") return "";
+  let text = value.trim();
+  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
+    try {
+      text = JSON.parse(text);
+    } catch {
+      text = text.slice(1, -1);
+    }
+  }
+  return text
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\n")
+    .replace(/\\"/g, '"')
+    .trimEnd();
 }
 
 function currentChapterWordCount() {
@@ -110,7 +146,7 @@ async function loadChapter(number) {
   const data = await request(`/api/projects/${state.activeSlug}/chapters/${number}`);
   state.currentChapterNumber = data.number;
   chapterTitle.textContent = `第 ${data.number} 章`;
-  chapterEditor.value = data.content;
+  chapterEditor.value = normalizeChapterText(data.content);
 }
 
 async function withBusy(button, task) {
@@ -156,7 +192,13 @@ document.querySelectorAll("[data-generate]").forEach((button) => {
         method: "POST",
         body: JSON.stringify(generationPayload()),
       });
-      setOutput(data);
+      setOutput({
+        kind: data.kind,
+        path: data.path,
+        summary: data.summary,
+        message: kind === "first_chapter" ? "第一章已生成，正文已显示在章节编辑区。" : "生成完成。",
+      });
+      if (data.quality) setDebug({ quality: data.quality });
       await loadProject(state.activeSlug);
       if (kind === "first_chapter") {
         await loadChapter(1);
@@ -213,7 +255,8 @@ $("#initializeProject").addEventListener("click", async () => {
       method: "POST",
       body: JSON.stringify(generationPayload()),
     });
-    setOutput(data);
+    setOutput({ message: data.message, steps: data.steps, project_name: data.project_name });
+    setDebug(data);
     await loadProject(state.activeSlug);
     await loadChapter(1);
   });
@@ -268,8 +311,8 @@ $("#rewriteChapter").addEventListener("click", async () => {
       method: "POST",
       body: JSON.stringify({ instruction }),
     });
-    setOutput(data);
-    chapterEditor.value = data.chapter_content || chapterEditor.value;
+    setOutput({ message: data.message, chapter_number: data.chapter_number, path: data.path });
+    chapterEditor.value = normalizeChapterText(data.chapter_content || chapterEditor.value);
     await loadProject(state.activeSlug);
   });
 });
@@ -283,8 +326,8 @@ $("#continueChapter").addEventListener("click", async () => {
     const data = await request(`/api/projects/${state.activeSlug}/chapters/${state.currentChapterNumber}/continue`, {
       method: "POST",
     });
-    setOutput(data);
-    chapterEditor.value = data.chapter_content || chapterEditor.value;
+    setOutput({ message: data.message, chapter_number: data.chapter_number, path: data.path });
+    chapterEditor.value = normalizeChapterText(data.chapter_content || chapterEditor.value);
     await loadProject(state.activeSlug);
   });
 });

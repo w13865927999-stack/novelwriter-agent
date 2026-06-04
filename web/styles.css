@@ -227,6 +227,16 @@ article {
   color: var(--warn);
 }
 
+.debug-panel {
+  margin-top: 12px;
+}
+
+.debug-panel summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 14px;
+}
+
 @media (max-width: 920px) {
   .layout,
   .content-grid,

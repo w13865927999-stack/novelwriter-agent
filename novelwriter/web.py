@@ -119,6 +119,15 @@ def _project_status(slug: str) -> dict[str, Any]:
     }
 
 
+def _ensure_ready_for_chapters(slug: str) -> None:
+    status = _project_status(slug)
+    if not status["ready_for_chapters"]:
+        raise HTTPException(
+            status_code=400,
+            detail="请先点击“一键初始化”，或按顺序生成前置资料：" + "、".join(status["missing"]),
+        )
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     index_path = WEB_DIR / "index.html"
@@ -203,14 +212,14 @@ def generate(slug: str, kind: str, options: GenerationOptions | None = Body(defa
         result = agent.generate_outline(slug)
         return {"kind": kind, **_path_payload(result["path"])}
     if kind == "first_chapter":
-        status = _project_status(slug)
-        if not status["ready_for_chapters"]:
-            raise HTTPException(status_code=400, detail="请先生成前置内容：" + "、".join(status["missing"]))
+        _ensure_ready_for_chapters(slug)
         result = agent.generate_chapter(slug, 1)
+        chapter_path = Path(result["path"])
         return {
             "kind": kind,
-            **_path_payload(result["path"]),
-            "summary": result["data"].get("summary", ""),
+            **_path_payload(chapter_path),
+            "chapter_content": chapter_path.read_text(encoding="utf-8"),
+            "summary": result.get("memory_update", {}).get("summary", ""),
             "quality": result["quality"],
         }
     raise HTTPException(status_code=400, detail="kind must be one of: setting, characters, world, outline, first_chapter")
@@ -238,9 +247,7 @@ def initialize_project(slug: str, options: GenerationOptions | None = Body(defau
 def generate_next_chapter(slug: str, options: GenerationOptions | None = Body(default=None)) -> dict[str, Any]:
     _project_or_404(slug)
     _apply_chapter_word_count(slug, options)
-    status = _project_status(slug)
-    if not status["ready_for_chapters"]:
-        raise HTTPException(status_code=400, detail="请先生成前置内容：" + "、".join(status["missing"]))
+    _ensure_ready_for_chapters(slug)
     try:
         result = agent.generate_next_chapter(slug)
     except ValueError as exc:

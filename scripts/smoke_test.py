@@ -119,6 +119,9 @@ def assert_web_surface() -> None:
         "Mock \u6a21\u5f0f",
         "loadProjects",
         "setOutput",
+        "normalizeChapterText",
+        "cleanDisplayPayload",
+        "debugOutput",
     ]:
         assert_contains(app_text, marker, "web/app.js")
 
@@ -141,6 +144,7 @@ def assert_web_surface() -> None:
         '@app.post("/api/projects/{slug}/references")',
         '@app.post("/api/projects/{slug}/references/analyze")',
         "chapter_word_count",
+        "_ensure_ready_for_chapters",
     ]:
         assert_contains(web_text, marker, "novelwriter/web.py")
 
@@ -148,10 +152,89 @@ def assert_web_surface() -> None:
         "\u6bcf\u7ae0\u76ee\u6807\u5b57\u6570",
         "\u4e0d\u5f97\u91cd\u590d\u4e0a\u4e00\u7ae0\u4e3b\u8981\u573a\u666f",
         "\u4e0d\u8981\u7167\u642c\u53c2\u8003\u6587\u672c",
+        "chapter_text",
+        "memory_update",
+        "LOCKED_SETTINGS_JSON",
         "TASK:CHAPTER_PLAN",
         "TASK:REFERENCE_ANALYSIS",
     ]:
         assert_contains(prompts_text, marker, "novelwriter/prompts.py")
+
+    assert_contains(index_text, "chapterEditor", "web/index.html")
+    assert_contains(index_text, "debugPanel", "web/index.html")
+    assert_contains(index_text, "\u540e\u53f0\u8bb0\u5fc6/\u8c03\u8bd5\u4fe1\u606f", "web/index.html")
+
+
+def assert_clean_chapter_text(path: Path) -> None:
+    text = path.read_text(encoding="utf-8")
+    forbidden = [
+        "new_locations",
+        "new_foreshadowing",
+        "occurred_events",
+        "memory_update",
+        "world_updates",
+        "discovered_clues",
+        '"id"',
+        '"description"',
+    ]
+    for marker in forbidden:
+        if marker in text:
+            raise AssertionError(f"chapter Markdown leaked memory/debug field: {marker}")
+    if "\\n\\n" in text:
+        raise AssertionError("chapter Markdown contains literal escaped newlines")
+
+
+def assert_chapter_generation_requires_prerequisites(agent: NovelWriterAgent) -> None:
+    slug, _ = agent.create_project(
+        {
+            "title": "Blocked Draft",
+            "slug": "blocked-draft",
+            "genre": "都市悬疑",
+            "target_readers": "测试读者",
+            "target_words": 12000,
+            "chapter_count": 2,
+            "words_per_chapter": 1200,
+            "protagonist": "测试角色",
+            "world_seed": "未生成前置资料",
+            "style": "简洁",
+            "pacing_reference": "每章有钩子",
+        }
+    )
+    try:
+        agent.generate_chapter(slug, 1)
+    except ValueError as exc:
+        message = str(exc)
+        if "\u4e00\u952e\u521d\u59cb\u5316" not in message or "\u5927\u7eb2" not in message:
+            raise AssertionError("missing-prerequisite error should guide users to initialize first") from exc
+    else:
+        raise AssertionError("chapter generation should fail before setting/characters/world/outline exist")
+
+
+def assert_splitter_keeps_memory_out_of_text(agent: NovelWriterAgent) -> None:
+    dirty_response = json.dumps(
+        {
+            "chapter_title": "第一章",
+            "chapter_text": "# 第一章\n\n洛青推开门。\\n\\n他看见新的线索。",
+            "memory_update": {
+                "summary": "洛青发现新线索。",
+                "new_locations": [{"id": "x", "description": "后台地点"}],
+                "events": [{"chapter": 1, "event": "后台事件"}],
+            },
+        },
+        ensure_ascii=False,
+    )
+    parsed = agent._split_chapter_response(dirty_response, 1)
+    text = parsed["chapter_text"]
+    if "\\n\\n" in text:
+        raise AssertionError("splitter failed to decode escaped newlines")
+    for marker in ("new_locations", "description", "memory_update", "events"):
+        if marker in text:
+            raise AssertionError(f"splitter leaked memory marker into chapter text: {marker}")
+
+    mixed_response = '# 第一章\n\n洛青推开门。\n\n{"new_locations":[{"id":"x","description":"后台地点"}]}'
+    parsed = agent._split_chapter_response(mixed_response, 1)
+    if "new_locations" in parsed["chapter_text"] or "description" in parsed["chapter_text"]:
+        raise AssertionError("splitter failed to strip trailing memory JSON from raw text")
 
 
 def main() -> int:
@@ -162,6 +245,8 @@ def main() -> int:
     try:
         config = AppConfig(mock=True, novels_dir=temp_root / "novels")
         agent = NovelWriterAgent(config)
+        assert_splitter_keeps_memory_out_of_text(agent)
+        assert_chapter_generation_requires_prerequisites(agent)
 
         slug, project_path = agent.create_project(
             {
@@ -234,6 +319,9 @@ def main() -> int:
             raise AssertionError("quality check did not return heuristic report")
         if "repetition_warning" not in report["heuristic"]:
             raise AssertionError("quality check did not include repetition scan")
+
+        assert_clean_chapter_text(Path(chapter["path"]))
+        assert_clean_chapter_text(Path(next_chapter["path"]))
 
         exported_text = Path(export_path).read_text(encoding="utf-8")
         if "\u7b2c" not in exported_text and "Chapter" not in exported_text:

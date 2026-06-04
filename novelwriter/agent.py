@@ -30,6 +30,26 @@ from .quality import heuristic_quality_scan
 from .storage import Storage
 
 
+MEMORY_FIELD_NAMES = {
+    "memory_update",
+    "summary",
+    "chapter_summary",
+    "new_characters",
+    "new_locations",
+    "new_foreshadowing",
+    "resolved_foreshadowing",
+    "relationship_changes",
+    "world_updates",
+    "events",
+    "occurred_events",
+    "discovered_clues",
+    "new_clues",
+    "current_plot_position",
+    "forbidden_repetition_notes",
+    "quality_notes",
+}
+
+
 class NovelWriterAgent:
     """High-level API used by the CLI and future integrations."""
 
@@ -137,7 +157,7 @@ class NovelWriterAgent:
         if "尚未生成" in self.storage.read_project_text(slug, "outline.md"):
             missing.append("大纲")
         if missing:
-            raise ValueError("请先生成前置内容：" + "、".join(missing))
+            raise ValueError("请先点击“一键初始化”，或按顺序生成前置资料：" + "、".join(missing))
 
     def generate_chapter_plan(self, slug: str, chapter_number: int) -> dict[str, Any]:
         context = self._chapter_context(slug, chapter_number)
@@ -173,15 +193,11 @@ class NovelWriterAgent:
         context["chapter_plan"] = self.generate_chapter_plan(slug, chapter_number)
         prompt = chapter_generation_prompt(**context)
         response = self.llm.generate(prompt, SYSTEM_PROMPT)
-        payload = self._json_or_default(response, {})
-        if not payload:
-            payload = {
-                "chapter_title": f"第{chapter_number}章",
-                "chapter_markdown": response.strip(),
-                "summary": "",
-            }
+        parsed = self._split_chapter_response(response, chapter_number)
+        payload = parsed["payload"]
+        chapter_text = parsed["chapter_text"]
+        memory_update = parsed["memory_update"]
 
-        chapter_text = payload.get("chapter_markdown") or response.strip()
         memory_before_save = self.storage.load_project_memory(slug)
         recent_chapters = self._recent_chapters(slug, chapter_number)
         quality = heuristic_quality_scan(context["profile"], context["chapter_outline"], chapter_text, memory_before_save, recent_chapters)
@@ -193,8 +209,8 @@ class NovelWriterAgent:
                 + "\n请完全避开上述重复问题，重写本章正文和记忆更新。"
             )
             retry_response = self.llm.generate(retry_prompt, SYSTEM_PROMPT)
-            retry_payload = self._json_or_default(retry_response, {})
-            retry_text = (retry_payload.get("chapter_markdown") if retry_payload else "") or retry_response.strip()
+            retry_parsed = self._split_chapter_response(retry_response, chapter_number)
+            retry_text = retry_parsed["chapter_text"]
             retry_quality = heuristic_quality_scan(
                 context["profile"],
                 context["chapter_outline"],
@@ -204,18 +220,19 @@ class NovelWriterAgent:
             )
             if not retry_quality.get("repetition_warning") or retry_quality.get("similarity_to_recent", 1) <= quality.get("similarity_to_recent", 1):
                 response = retry_response
-                payload = retry_payload or {"chapter_title": f"第{chapter_number}章", "chapter_markdown": retry_text, "summary": ""}
+                payload = retry_parsed["payload"]
                 chapter_text = retry_text
+                memory_update = retry_parsed["memory_update"]
                 quality = retry_quality
 
         chapter_path = self.storage.save_chapter(slug, chapter_number, chapter_text)
         memory = self.storage.load_project_memory(slug)
-        apply_chapter_update(memory, chapter_number, payload)
+        apply_chapter_update(memory, chapter_number, memory_update)
         self.storage.save_project_memory(slug, memory)
 
         self.storage.append_log(slug, f"chapter-{chapter_number:03d}-generation", self._log_payload("章节生成", response, payload))
         self.storage.append_log(slug, f"chapter-{chapter_number:03d}-quality", json.dumps(quality, ensure_ascii=False, indent=2))
-        return {"path": chapter_path, "data": payload, "quality": quality}
+        return {"path": chapter_path, "data": payload, "memory_update": memory_update, "quality": quality}
 
     def generate_next_chapter(self, slug: str) -> dict[str, Any]:
         project = self.storage.load_metadata(slug)
@@ -231,13 +248,14 @@ class NovelWriterAgent:
         memory = self.storage.load_project_memory(slug)
         prompt = continue_chapter_prompt(profile, chapter_number, chapter_text, memory)
         response = self.llm.generate(prompt, SYSTEM_PROMPT)
-        payload = self._json_or_default(response, {})
-        appended = payload.get("appended_markdown") or response.strip()
+        parsed = self._split_chapter_response(response, chapter_number, text_keys=("appended_text", "appended_markdown", "chapter_text", "chapter_markdown"))
+        payload = parsed["payload"]
+        appended = parsed["chapter_text"]
         path = self.storage.append_chapter(slug, chapter_number, appended)
-        apply_chapter_update(memory, chapter_number, payload)
+        apply_chapter_update(memory, chapter_number, parsed["memory_update"])
         self.storage.save_project_memory(slug, memory)
         self.storage.append_log(slug, f"chapter-{chapter_number:03d}-continue", self._log_payload("续写", response, payload))
-        return {"path": path, "data": payload}
+        return {"path": path, "data": payload, "memory_update": parsed["memory_update"]}
 
     def rewrite_chapter(self, slug: str, chapter_number: int, instruction: str) -> dict[str, Any]:
         profile = self._profile(slug)
@@ -245,13 +263,14 @@ class NovelWriterAgent:
         memory = self.storage.load_project_memory(slug)
         prompt = rewrite_chapter_prompt(profile, chapter_number, chapter_text, instruction, memory)
         response = self.llm.generate(prompt, SYSTEM_PROMPT)
-        payload = self._json_or_default(response, {})
-        rewritten = payload.get("chapter_markdown") or response.strip()
+        parsed = self._split_chapter_response(response, chapter_number)
+        payload = parsed["payload"]
+        rewritten = parsed["chapter_text"]
         path = self.storage.save_chapter(slug, chapter_number, rewritten)
-        apply_chapter_update(memory, chapter_number, payload)
+        apply_chapter_update(memory, chapter_number, parsed["memory_update"])
         self.storage.save_project_memory(slug, memory)
         self.storage.append_log(slug, f"chapter-{chapter_number:03d}-rewrite", self._log_payload("重写", response, payload))
-        return {"path": path, "data": payload}
+        return {"path": path, "data": payload, "memory_update": parsed["memory_update"]}
 
     def polish_chapter(self, slug: str, chapter_number: int, instruction: str) -> dict[str, Any]:
         profile = self._profile(slug)
@@ -371,6 +390,127 @@ class NovelWriterAgent:
             except FileNotFoundError:
                 continue
         return recent
+
+    def _split_chapter_response(
+        self,
+        response: str,
+        chapter_number: int,
+        text_keys: tuple[str, ...] = ("chapter_text", "chapter_markdown", "chapter_content", "appended_text", "appended_markdown"),
+    ) -> dict[str, Any]:
+        """Separate model output into pure chapter text and background memory JSON.
+
+        Real models sometimes return JSON as a string, escaped Markdown, or a
+        Markdown section followed by a memory object. This method is deliberately
+        defensive: only the sanitized novel text is written to chapter files,
+        while all structured fields are merged into memory.json.
+        """
+
+        payload = self._json_or_default(response, {})
+        if not isinstance(payload, dict):
+            payload = {}
+
+        chapter_text = ""
+        for key in text_keys:
+            value = payload.get(key)
+            if value:
+                chapter_text = self._sanitize_chapter_text(value, chapter_number)
+                break
+
+        if not chapter_text:
+            chapter_text = self._sanitize_chapter_text(response, chapter_number)
+
+        memory_update = self._extract_memory_update(payload)
+        if not memory_update.get("summary"):
+            memory_update["summary"] = self._summarize_for_memory(chapter_text)
+
+        normalized_payload = {
+            "chapter_title": payload.get("chapter_title") or self._chapter_title_from_text(chapter_text, chapter_number),
+            "chapter_text": chapter_text,
+            "memory_update": memory_update,
+        }
+        return {"payload": normalized_payload, "chapter_text": chapter_text, "memory_update": memory_update}
+
+    @staticmethod
+    def _extract_memory_update(payload: dict[str, Any]) -> dict[str, Any]:
+        memory_update = payload.get("memory_update")
+        if isinstance(memory_update, dict):
+            result = dict(memory_update)
+        else:
+            result = {key: payload.get(key) for key in MEMORY_FIELD_NAMES if key in payload and key != "memory_update"}
+
+        for key in ("new_characters", "new_locations", "new_foreshadowing", "resolved_foreshadowing", "relationship_changes", "events", "discovered_clues", "forbidden_repetition_notes", "quality_notes"):
+            if result.get(key) is None:
+                result[key] = []
+        if not isinstance(result.get("world_updates"), dict):
+            result["world_updates"] = {"rules": [], "timeline": [], "locations": [], "factions": [], "systems": [], "taboos": []}
+        return result
+
+    @classmethod
+    def _sanitize_chapter_text(cls, value: Any, chapter_number: int) -> str:
+        if isinstance(value, (dict, list)):
+            candidate = ""
+        else:
+            candidate = str(value or "").strip()
+
+        if candidate.startswith("```"):
+            candidate = re.sub(r"^```(?:markdown|md|text)?", "", candidate, flags=re.I).strip()
+            candidate = re.sub(r"```$", "", candidate).strip()
+
+        decoded = cls._decode_json_string(candidate)
+        if decoded is not None:
+            candidate = decoded.strip()
+
+        if "\\n" in candidate or "\\r" in candidate or '\\"' in candidate:
+            maybe_decoded = cls._decode_json_string(f'"{candidate}"')
+            if maybe_decoded is not None:
+                candidate = maybe_decoded.strip()
+            else:
+                candidate = candidate.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\r", "\n").replace('\\"', '"')
+
+        candidate = cls._strip_embedded_memory_json(candidate).strip()
+        candidate = candidate.strip('"').strip()
+        if not candidate:
+            candidate = f"# 第{chapter_number}章\n\n（本章正文生成失败，请重写本章。）"
+        return candidate.rstrip() + "\n"
+
+    @staticmethod
+    def _decode_json_string(value: str) -> str | None:
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+        return decoded if isinstance(decoded, str) else None
+
+    @staticmethod
+    def _strip_embedded_memory_json(text: str) -> str:
+        text = re.sub(r"```json\s*.*?```", "", text, flags=re.I | re.S)
+        text = re.sub(r"(?is)\n+\s*(MEMORY_UPDATE|memory_update|后台记忆|记忆更新)\s*[:：].*$", "", text)
+        memory_markers = tuple(MEMORY_FIELD_NAMES - {"summary", "chapter_summary"})
+        first_brace = text.find("{")
+        if first_brace != -1:
+            tail = text[first_brace:]
+            if any(f'"{marker}"' in tail or f"'{marker}'" in tail for marker in memory_markers):
+                text = text[:first_brace]
+        for marker in memory_markers:
+            marker_index = text.find(marker)
+            if marker_index != -1:
+                line_start = text.rfind("\n", 0, marker_index)
+                if line_start != -1:
+                    text = text[:line_start]
+        return text
+
+    @staticmethod
+    def _chapter_title_from_text(text: str, chapter_number: int) -> str:
+        for line in text.splitlines():
+            title = line.strip().lstrip("#").strip()
+            if title:
+                return title[:80]
+        return f"第{chapter_number}章"
+
+    @staticmethod
+    def _summarize_for_memory(text: str, limit: int = 180) -> str:
+        compact = re.sub(r"\s+", " ", text).strip("# ").strip()
+        return compact[:limit]
 
     @staticmethod
     def extract_chapter_outline(outline: str, chapter_number: int) -> str:

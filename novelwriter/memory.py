@@ -40,6 +40,16 @@ def default_memory(project: dict[str, Any]) -> dict[str, Any]:
             "open_foreshadowing": [],
             "resolved_foreshadowing": [],
         },
+        "locked_settings": {
+            "characters": {},
+            "world_rules": [],
+            "outline_rules": [
+                "章节新事件必须来自完整大纲或本章计划",
+                "人物名、身份、核心目标不能无铺垫变化",
+                "世界观核心规则不能被临时新增设定推翻",
+                "新增地点、人物和伏笔必须写入 memory.json 并保持一致",
+            ],
+        },
         "chapter_summaries": {},
         "occurred_events": [],
         "discovered_clues": [],
@@ -91,6 +101,11 @@ def apply_character_cards(memory: dict[str, Any], characters_payload: dict[str, 
         if not isinstance(card, dict) or not card.get("name"):
             continue
         memory.setdefault("characters", {})[card["name"]] = card
+        memory.setdefault("locked_settings", {}).setdefault("characters", {})[card["name"]] = {
+            "identity": card.get("identity", ""),
+            "goal": card.get("goal", ""),
+            "personality": card.get("personality", ""),
+        }
     return memory
 
 
@@ -100,6 +115,8 @@ def apply_worldbuilding_seed(memory: dict[str, Any], world_payload: dict[str, An
         value = world_payload.get(key, [])
         if isinstance(value, list):
             _append_unique(world.setdefault(key, []), value)
+            if key == "rules":
+                _append_unique(memory.setdefault("locked_settings", {}).setdefault("world_rules", []), value)
     return memory
 
 
@@ -109,6 +126,9 @@ def apply_chapter_update(
     update: dict[str, Any],
 ) -> dict[str, Any]:
     """Merge chapter output into memory.json without discarding prior facts."""
+
+    if not isinstance(update, dict):
+        update = {}
 
     memory["current_chapter"] = max(int(memory.get("current_chapter", 0)), chapter_number)
 

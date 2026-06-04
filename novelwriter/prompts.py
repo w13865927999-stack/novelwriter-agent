@@ -17,7 +17,7 @@ SYSTEM_PROMPT = """你是 NovelWriter Agent，一个专业长篇小说创作智�
 6. 你需要保持人物成长线，避免角色行为突然崩坏。
 7. 每章都必须包含冲突、推进、情绪变化和结尾钩子。
 8. 你必须根据用户指定题材、目标读者、叙事节奏和写作风格创作。
-9. 输出小说正文时，正文内容内部不要夹杂解释、分析、创作说明或元叙事。
+9. 输出小说正文时，正文内容内部只允许小说正文，不要夹杂 JSON、解释、分析、创作说明或元叙事。
 10. 生成规划、记忆更新和质检时必须结构化输出，并优先输出合法 JSON 或清晰 Markdown。
 
 写作底线：
@@ -217,23 +217,25 @@ def chapter_generation_prompt(
     reference_analysis: str = "",
 ) -> str:
     target_words = int(profile.get("words_per_chapter") or 3000)
+    locked_settings = memory.get("locked_settings", {})
     return f"""[TASK:CHAPTER]
 CHAPTER_NUMBER: {chapter_number}
-请生成第 {chapter_number} 章正文和记忆更新。只输出合法 JSON，不要输出 Markdown 代码块。
+请生成第 {chapter_number} 章正文和后台记忆更新。只输出合法 JSON，不要输出 Markdown 代码块。
 
 硬性要求：
 1. 生成章节前必须遵守 memory.json、人物卡、世界观、完整大纲和当前章节大纲。
-2. chapter_markdown 字段内部只写小说正文，不要夹杂解释。
+2. chapter_text 字段内部只能写小说正文 Markdown，不允许出现 JSON、memory_update、new_locations、new_foreshadowing、occurred_events、解释、分析或创作说明。
 3. 正文必须符合用户指定风格：{profile.get("style", "")}
 4. 每章必须有冲突、推进、人物变化和结尾钩子。
-5. 不要制造与既有记忆冲突的新设定。
-6. 如新增伏笔、地点、人物、事件，必须在对应字段登记。
+5. 不要制造与既有记忆冲突的新设定，不要突然引入未铺垫的大设定。
+6. 如新增伏笔、地点、人物、事件，只能在 memory_update 对应字段登记，不要写成正文后的 JSON 片段。
 7. 本章正文目标字数约 {target_words} 字，请尽量贴近该篇幅并保持节奏完整。
 8. 不得重复上一章主要场景、已发生事件、已发现线索或上一章开头描写。
 9. 不得让角色重新发现已经发现过的信息，不得重复同一段冲突。
 10. 不得使用“主角”“{profile.get("genre", "")}故事”等出戏表达，要直接使用角色姓名和故事内语言。
-11. 每章必须推进一个新事件，产生新的冲突、线索或反转，结尾必须有新的钩子。
+11. 每章必须推进一个新事件，且新事件必须来自 CURRENT_CHAPTER_OUTLINE 或 CHAPTER_PLAN_JSON，不能脱离主线大纲跳跃。
 12. 参考文本只允许借鉴抽象结构、节奏和技法，不得照搬原文、角色名、地名、独特设定或具体情节。
+13. 人物名、身份、核心目标不能随意变化；世界观核心规则不能被临时推翻；主线大纲不能无因果跳跃。
 
 PROFILE_JSON:
 {_json(profile)}
@@ -256,6 +258,9 @@ CURRENT_CHAPTER_OUTLINE:
 MEMORY_JSON:
 {_json(memory)}
 
+LOCKED_SETTINGS_JSON:
+{_json(locked_settings)}
+
 PREVIOUS_CHAPTER_SUMMARY:
 {previous_summary}
 
@@ -268,19 +273,21 @@ REFERENCE_ANALYSIS:
 输出 JSON schema:
 {{
   "chapter_title": "章节标题",
-  "chapter_markdown": "# 第{chapter_number}章 章节标题\\n\\n小说正文",
-  "summary": "本章摘要",
-  "new_characters": [],
-  "new_locations": [],
-  "new_foreshadowing": [],
-  "resolved_foreshadowing": [],
-  "relationship_changes": [],
-  "world_updates": {{"rules": [], "timeline": [], "locations": [], "factions": [], "systems": [], "taboos": []}},
-  "events": [],
-  "discovered_clues": [],
-  "current_plot_position": "当前剧情进度",
-  "forbidden_repetition_notes": [],
-  "quality_notes": []
+  "chapter_text": "# 第{chapter_number}章 章节标题\\n\\n这里只写小说正文 Markdown，不要写 JSON，不要写解释，不要写后台记忆字段",
+  "memory_update": {{
+    "summary": "本章摘要",
+    "new_characters": [],
+    "new_locations": [],
+    "new_foreshadowing": [],
+    "resolved_foreshadowing": [],
+    "relationship_changes": [],
+    "world_updates": {{"rules": [], "timeline": [], "locations": [], "factions": [], "systems": [], "taboos": []}},
+    "events": [],
+    "discovered_clues": [],
+    "current_plot_position": "当前剧情进度",
+    "forbidden_repetition_notes": [],
+    "quality_notes": []
+  }}
 }}
 """
 
@@ -409,6 +416,7 @@ def continue_chapter_prompt(
     return f"""[TASK:CONTINUE_CHAPTER]
 请续写第 {chapter_number} 章。只输出合法 JSON，不要输出 Markdown 代码块。
 续写内容必须接在原文之后，保持语气、人物、冲突和世界观一致。
+appended_text 字段只能写小说正文，不要写 JSON、解释或后台记忆字段。不要使用“主角”等出戏称呼。
 
 PROFILE_JSON:
 {_json(profile)}
@@ -421,16 +429,18 @@ EXISTING_CHAPTER:
 
 输出 JSON schema:
 {{
-  "appended_markdown": "续写正文，不要重复原文",
-  "summary": "续写后的本章摘要",
-  "new_characters": [],
-  "new_locations": [],
-  "new_foreshadowing": [],
-  "resolved_foreshadowing": [],
-  "relationship_changes": [],
-  "world_updates": {{"rules": [], "timeline": [], "locations": [], "factions": [], "systems": [], "taboos": []}},
-  "events": [],
-  "quality_notes": []
+  "appended_text": "续写正文，不要重复原文，不要包含 JSON",
+  "memory_update": {{
+    "summary": "续写后的本章摘要",
+    "new_characters": [],
+    "new_locations": [],
+    "new_foreshadowing": [],
+    "resolved_foreshadowing": [],
+    "relationship_changes": [],
+    "world_updates": {{"rules": [], "timeline": [], "locations": [], "factions": [], "systems": [], "taboos": []}},
+    "events": [],
+    "quality_notes": []
+  }}
 }}
 """
 
@@ -445,6 +455,7 @@ def rewrite_chapter_prompt(
     return f"""[TASK:REWRITE_CHAPTER]
 请重写第 {chapter_number} 章。只输出合法 JSON，不要输出 Markdown 代码块。
 必须保留大纲方向和已确认事实，并按照用户要求改写：{instruction}
+chapter_text 字段只能写小说正文，不要写 JSON、解释或后台记忆字段。不要使用“主角”等出戏称呼，不要突然引入未铺垫的大设定。
 
 PROFILE_JSON:
 {_json(profile)}
@@ -457,16 +468,18 @@ ORIGINAL_CHAPTER:
 
 输出 JSON schema:
 {{
-  "chapter_markdown": "# 第{chapter_number}章 标题\\n\\n重写后的小说正文",
-  "summary": "本章摘要",
-  "new_characters": [],
-  "new_locations": [],
-  "new_foreshadowing": [],
-  "resolved_foreshadowing": [],
-  "relationship_changes": [],
-  "world_updates": {{"rules": [], "timeline": [], "locations": [], "factions": [], "systems": [], "taboos": []}},
-  "events": [],
-  "quality_notes": []
+  "chapter_text": "# 第{chapter_number}章 标题\\n\\n重写后的小说正文，不要包含 JSON",
+  "memory_update": {{
+    "summary": "本章摘要",
+    "new_characters": [],
+    "new_locations": [],
+    "new_foreshadowing": [],
+    "resolved_foreshadowing": [],
+    "relationship_changes": [],
+    "world_updates": {{"rules": [], "timeline": [], "locations": [], "factions": [], "systems": [], "taboos": []}},
+    "events": [],
+    "quality_notes": []
+  }}
 }}
 """
 
