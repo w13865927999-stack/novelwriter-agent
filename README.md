@@ -15,6 +15,7 @@ NovelWriter Agent 是一个本地可运行的自动写小说智能体项目。�
 - 使用 `memory.json` 记录人物、世界观、事件、章节摘要和伏笔
 - 支持续写、重写、润色、更新记忆、质量检查
 - 导出整本小说为一个 Markdown 文件
+- 提供 FastAPI Web 页面，可创建项目、生成设定/人物/世界观/大纲/第一章、查看章节和导出 Markdown
 - LLM 调用层可替换，支持 OpenAI API、本地模型和其他 OpenAI 兼容服务
 
 ## 项目结构
@@ -43,7 +44,12 @@ scripts/
   smoke_test.py
   smoke.ps1
   smoke.sh
+  run_web.py
   codex_setup.sh
+web/
+  index.html
+  styles.css
+  app.js
 novels/
   .gitkeep
   sample-cyber-mystery/
@@ -163,6 +169,42 @@ python main.py list
 ```powershell
 python main.py select sample-cyber-mystery
 ```
+
+## Web 版本
+
+启动 FastAPI Web 应用：
+
+```powershell
+python scripts/run_web.py
+```
+
+如果当前环境没有 `python` 命令，请使用可用解释器运行同一个脚本，例如：
+
+```powershell
+C:\Users\Administrator\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe scripts\run_web.py
+```
+
+打开浏览器访问：
+
+```text
+http://127.0.0.1:8000
+```
+
+Web 页面支持：
+
+- 创建小说项目
+- 输入小说标题、题材、主角、风格、章节数量
+- 点击按钮生成设定、人物、世界观、大纲、第一章
+- 查看已生成章节
+- 导出整本小说 Markdown
+
+FastAPI 入口：
+
+```bash
+uvicorn novelwriter.web:app --reload
+```
+
+Web API 不会返回 `.env` 内容，也不会把 API Key 渲染到前端。真实密钥仍然只应保存在本地 `.env` 或云平台 secrets 中。
 
 ## 创建新小说
 
@@ -366,7 +408,10 @@ python scripts/smoke_test.py
 - `novelwriter/config.py`：环境变量和模型配置
 - `novelwriter/quality.py`：离线可运行的启发式质量检查
 - `novelwriter/llm.py`：OpenAI 兼容模型接口和 mock 模式
+- `novelwriter/web.py`：FastAPI Web 后端
+- `web/`：HTML、CSS、JavaScript 前端页面
 - `scripts/smoke_test.py`：离线 smoke test
+- `scripts/run_web.py`：启动 Web 应用
 - `AGENTS.md`：给 Codex/自动化维护者的仓库说明
 
 ## 记忆管理方案

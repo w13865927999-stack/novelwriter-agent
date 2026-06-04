@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import py_compile
 import shutil
 import sys
 import tempfile
@@ -59,6 +60,13 @@ def main() -> int:
         chapter = agent.generate_chapter(slug, 1)
         report = agent.check_chapter(slug, 1)
         export_path = agent.export_novel(slug)
+        web_files = [
+            ROOT / "novelwriter" / "web.py",
+            ROOT / "web" / "index.html",
+            ROOT / "web" / "styles.css",
+            ROOT / "web" / "app.js",
+            ROOT / "scripts" / "run_web.py",
+        ]
 
         for label, result in {
             "setting": setting,
@@ -70,6 +78,10 @@ def main() -> int:
             assert_exists(Path(result["path"]), label)
 
         assert_exists(export_path, "exported novel")
+        for web_file in web_files:
+            assert_exists(web_file, f"web file {web_file.name}")
+        py_compile.compile(str(ROOT / "novelwriter" / "web.py"), doraise=True)
+        py_compile.compile(str(ROOT / "scripts" / "run_web.py"), doraise=True)
 
         memory_path = project_path / "memory.json"
         memory = json.loads(memory_path.read_text(encoding="utf-8"))
@@ -78,7 +90,7 @@ def main() -> int:
         if not report.get("heuristic"):
             raise AssertionError("quality check did not return heuristic report")
 
-        print("[smoke] OK: project creation, generation, memory update, quality check, export")
+        print("[smoke] OK: project creation, generation, memory update, quality check, export, web files")
         return 0
     finally:
         if keep_dir:
@@ -89,4 +101,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -12,6 +12,7 @@
 
 - Smoke test: `python scripts/smoke_test.py`
 - CLI help: `python main.py --help`
+- Web app: `python scripts/run_web.py`
 - List projects: `python main.py list`
 - Run sample quality check: `python main.py --project sample-cyber-mystery check 1`
 
@@ -31,9 +32,15 @@ python3 scripts/smoke_test.py
 
 The smoke test creates a temporary project and should not modify committed sample novels.
 
+## Web App
+
+- FastAPI app entrypoint: `novelwriter.web:app`
+- Simple frontend files live in `web/`.
+- Run locally with `python scripts/run_web.py` or `uvicorn novelwriter.web:app --reload`.
+- Keep API keys in `.env` or platform secrets. Never render them in the frontend or return them from API endpoints.
+
 ## Safety Notes
 
 - Real API keys belong in `.env` locally or in Codex/GitHub secret settings, never in tracked files.
 - `novels/**/logs/*` and `novels/**/exported_novel.md` are generated outputs and are intentionally ignored.
 - Sample project files under `novels/sample-cyber-mystery/` are test fixtures and documentation examples.
-

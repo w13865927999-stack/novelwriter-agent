@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NovelWriter Agent</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>NovelWriter Agent</h1>
+        <p id="health">正在连接本地智能体...</p>
+      </div>
+      <button id="refreshProjects" type="button">刷新项目</button>
+    </header>
+
+    <main class="layout">
+      <section class="panel creator">
+        <h2>创建小说项目</h2>
+        <form id="projectForm">
+          <label>
+            小说标题
+            <input name="title" value="霓虹回声 Web 版" required />
+          </label>
+          <label>
+            题材
+            <input name="genre" value="赛博朋克悬疑" required />
+          </label>
+          <label>
+            主角
+            <textarea name="protagonist" rows="3" required>失去部分记忆的城市调查员林澈</textarea>
+          </label>
+          <label>
+            风格
+            <textarea name="style" rows="3" required>网文节奏，悬疑推进，画面感强</textarea>
+          </label>
+          <label>
+            章节数量
+            <input name="chapter_count" type="number" min="1" max="300" value="12" required />
+          </label>
+          <button type="submit">创建项目</button>
+        </form>
+      </section>
+
+      <section class="panel workspace">
+        <div class="section-title">
+          <div>
+            <h2>项目工作台</h2>
+            <p id="activeProject">未选择项目</p>
+          </div>
+          <select id="projectSelect" aria-label="选择项目"></select>
+        </div>
+
+        <div class="actions">
+          <button data-generate="setting" type="button">生成设定</button>
+          <button data-generate="characters" type="button">生成人物</button>
+          <button data-generate="world" type="button">生成世界观</button>
+          <button data-generate="outline" type="button">生成大纲</button>
+          <button data-generate="first_chapter" type="button">生成第一章</button>
+          <button id="exportNovel" type="button">导出 Markdown</button>
+        </div>
+
+        <div class="content-grid">
+          <section>
+            <h3>生成结果</h3>
+            <pre id="output">等待操作...</pre>
+          </section>
+          <section>
+            <h3>章节</h3>
+            <div id="chapters" class="chapter-list"></div>
+          </section>
+        </div>
+
+        <section class="reader">
+          <h3 id="chapterTitle">章节正文</h3>
+          <article id="chapterContent">选择或生成章节后在这里查看。</article>
+        </section>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
+
