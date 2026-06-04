@@ -159,10 +159,31 @@ $("#exportNovel").addEventListener("click", async () => {
   });
 });
 
+$("#generateNextChapter").addEventListener("click", async () => {
+  if (!state.activeSlug) {
+    setOutput("请先创建或选择项目。");
+    return;
+  }
+  await withBusy($("#generateNextChapter"), async () => {
+    const data = await request(`/api/projects/${state.activeSlug}/next`, { method: "POST" });
+    setOutput({
+      message: data.message,
+      project: data.project_name,
+      chapter: data.chapter_number,
+      title: data.chapter_title,
+      path: data.path,
+    });
+    await loadProject(state.activeSlug);
+    if (data.chapter_number) {
+      chapterTitle.textContent = data.chapter_title || `第 ${data.chapter_number} 章`;
+      chapterContent.textContent = data.chapter_content || "章节已生成。";
+    }
+  });
+});
+
 $("#refreshProjects").addEventListener("click", () => loadProjects(state.activeSlug));
 projectSelect.addEventListener("change", () => loadProject(projectSelect.value));
 
 loadHealth()
   .then(() => loadProjects())
   .catch((error) => setOutput(`启动失败：${error.message}`));
-

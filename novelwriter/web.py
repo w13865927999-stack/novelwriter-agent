@@ -130,6 +130,34 @@ def generate(slug: str, kind: str) -> dict[str, Any]:
     raise HTTPException(status_code=400, detail="kind must be one of: setting, characters, world, outline, first_chapter")
 
 
+@app.post("/api/projects/{slug}/next")
+def generate_next_chapter(slug: str) -> dict[str, Any]:
+    _project_or_404(slug)
+    try:
+        result = agent.generate_next_chapter(slug)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to generate next chapter: {exc}") from exc
+
+    chapter_path = Path(result["path"])
+    try:
+        chapter_number = int(chapter_path.stem.replace("chapter_", ""))
+    except ValueError:
+        chapter_number = int(agent.storage.load_project_memory(slug).get("current_chapter", 0))
+
+    content = chapter_path.read_text(encoding="utf-8") if chapter_path.exists() else ""
+    title = result["data"].get("chapter_title") or _chapter_title_from_content(content, chapter_number)
+    return {
+        "project_name": slug,
+        "chapter_number": chapter_number,
+        "chapter_title": title,
+        "chapter_content": content,
+        "path": str(chapter_path.resolve()),
+        "message": f"第 {chapter_number} 章生成成功。",
+    }
+
+
 @app.get("/api/projects/{slug}/chapters")
 def list_chapters(slug: str) -> dict[str, Any]:
     _project_or_404(slug)
@@ -179,3 +207,10 @@ def _list_chapters(project_path: Path) -> list[dict[str, Any]]:
         chapters.append({"number": number, "title": title, "path": str(path.resolve())})
     return chapters
 
+
+def _chapter_title_from_content(content: str, chapter_number: int) -> str:
+    for line in content.splitlines():
+        title = line.strip().lstrip("#").strip()
+        if title:
+            return title
+    return f"第{chapter_number}章"

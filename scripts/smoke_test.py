@@ -58,6 +58,7 @@ def main() -> int:
         world = agent.generate_worldbuilding(slug)
         outline = agent.generate_outline(slug)
         chapter = agent.generate_chapter(slug, 1)
+        next_chapter = agent.generate_next_chapter(slug)
         report = agent.check_chapter(slug, 1)
         export_path = agent.export_novel(slug)
         web_files = [
@@ -74,6 +75,7 @@ def main() -> int:
             "world": world,
             "outline": outline,
             "chapter": chapter,
+            "next_chapter": next_chapter,
         }.items():
             assert_exists(Path(result["path"]), label)
 
@@ -83,9 +85,19 @@ def main() -> int:
         py_compile.compile(str(ROOT / "novelwriter" / "web.py"), doraise=True)
         py_compile.compile(str(ROOT / "scripts" / "run_web.py"), doraise=True)
 
+        index_text = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+        app_text = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+        web_text = (ROOT / "novelwriter" / "web.py").read_text(encoding="utf-8")
+        if "生成下一章" not in index_text:
+            raise AssertionError("web/index.html must contain the generate next chapter button text")
+        if "/next" not in app_text or "generateNextChapter" not in app_text:
+            raise AssertionError("web/app.js must contain next chapter request logic")
+        if '@app.post("/api/projects/{slug}/next")' not in web_text:
+            raise AssertionError("novelwriter/web.py must expose the next chapter API route")
+
         memory_path = project_path / "memory.json"
         memory = json.loads(memory_path.read_text(encoding="utf-8"))
-        if int(memory.get("current_chapter", 0)) < 1:
+        if int(memory.get("current_chapter", 0)) < 2:
             raise AssertionError("memory.json was not updated after chapter generation")
         if not report.get("heuristic"):
             raise AssertionError("quality check did not return heuristic report")
