@@ -1,0 +1,17 @@
+{
+  "title": "霓虹回声",
+  "slug": "sample-cyber-mystery",
+  "genre": "赛博朋克悬疑",
+  "target_readers": "喜欢强情节、反转和都市幻想感的网文读者",
+  "target_words": 120000,
+  "chapter_count": 12,
+  "words_per_chapter": 3000,
+  "protagonist": "失去部分记忆的城市调查员林澈",
+  "world_seed": "巨型城市被算法和财阀共同统治，记忆可被交易",
+  "style": "网文节奏，悬疑推进，画面感强",
+  "pacing_reference": "三章一钩子，十章一反转",
+  "created_at": "2026-06-04T00:00:00+00:00",
+  "updated_at": "2026-06-04T00:00:00+00:00",
+  "status": "draft"
+}
+

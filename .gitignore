@@ -1,0 +1,33 @@
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+
+# NovelWriter local state
+.novelwriter_state.json
+
+# Python
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Build and packaging
+dist/
+build/
+*.egg-info/
+
+# Generated NovelWriter outputs
+novels/**/logs/*
+!novels/**/logs/.gitkeep
+novels/**/exported_novel.md
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
