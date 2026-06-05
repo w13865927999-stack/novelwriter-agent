@@ -5,6 +5,7 @@
 
 # NovelWriter local state
 .novelwriter_state.json
+data/*.json
 
 # Python
 .venv/

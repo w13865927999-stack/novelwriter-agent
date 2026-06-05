@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
@@ -15,6 +18,8 @@ from . import AppConfig, NovelWriterAgent
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 WEB_DIR = ROOT_DIR / "web"
+DATA_DIR = ROOT_DIR / "data"
+TASKS_PATH = DATA_DIR / "tasks.json"
 
 app = FastAPI(title="NovelWriter Agent", version="0.2.0")
 agent = NovelWriterAgent(AppConfig.load())
@@ -53,6 +58,14 @@ class ChapterInstructionRequest(BaseModel):
 class ReferenceRequest(BaseModel):
     reference_text: str = Field(min_length=1)
     reference_note: str = ""
+
+
+class WorkspaceTaskRequest(BaseModel):
+    task: str | None = None
+    message: str | None = None
+    context: dict[str, Any] = Field(default_factory=dict)
+    options: dict[str, Any] = Field(default_factory=dict)
+    route: dict[str, Any] = Field(default_factory=dict)
 
 
 def _project_or_404(slug: str) -> None:
@@ -128,6 +141,154 @@ def _ensure_ready_for_chapters(slug: str) -> None:
         )
 
 
+def _capabilities() -> list[dict[str, str]]:
+    return [
+        {"name": "create_project", "description": "创建小说项目"},
+        {"name": "generate_setting", "description": "生成小说设定"},
+        {"name": "generate_characters", "description": "生成人物卡"},
+        {"name": "generate_world", "description": "生成世界观"},
+        {"name": "generate_outline", "description": "生成大纲"},
+        {"name": "generate_first_chapter", "description": "生成第一章"},
+        {"name": "generate_next_chapter", "description": "生成下一章"},
+        {"name": "rewrite_chapter", "description": "重写章节"},
+        {"name": "continue_chapter", "description": "续写章节"},
+        {"name": "export_markdown", "description": "导出 Markdown"},
+    ]
+
+
+def _task_history() -> list[dict[str, Any]]:
+    if not TASKS_PATH.exists():
+        return []
+    try:
+        data = json.loads(TASKS_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _save_task_record(record: dict[str, Any]) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    tasks = _task_history()
+    tasks.insert(0, record)
+    TASKS_PATH.write_text(json.dumps(tasks[:200], ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _record_task(
+    *,
+    task_id: str,
+    task: str,
+    action: str,
+    project: str | None,
+    success: bool,
+    result: Any = None,
+    files: list[str] | None = None,
+    warnings: list[str] | None = None,
+    error: str = "",
+) -> dict[str, Any]:
+    record = {
+        "task_id": task_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "agent": "novelwriter-agent",
+        "task": task,
+        "action": action,
+        "project": project,
+        "success": success,
+        "result": result,
+        "files": files or [],
+        "warnings": warnings or [],
+        "error": error,
+    }
+    _save_task_record(record)
+    return record
+
+
+def _resolve_workspace_task_text(payload: WorkspaceTaskRequest) -> str:
+    return (payload.task or payload.message or "").strip()
+
+
+def _detect_workspace_action(task_text: str) -> str:
+    lowered = task_text.lower()
+    if any(keyword in task_text for keyword in ("下一章", "继续写", "生成下一章")):
+        return "generate_next_chapter"
+    if any(keyword in task_text for keyword in ("第一章", "生成第一章")):
+        return "generate_first_chapter"
+    if "设定" in task_text:
+        return "generate_setting"
+    if "人物" in task_text:
+        return "generate_characters"
+    if "世界观" in task_text:
+        return "generate_world"
+    if "大纲" in task_text:
+        return "generate_outline"
+    if "导出" in task_text or "export" in lowered:
+        return "export_markdown"
+    if "重写" in task_text:
+        return "rewrite_chapter"
+    if "续写" in task_text:
+        return "continue_chapter"
+    return "unknown"
+
+
+def _recent_project_slug() -> str | None:
+    active = agent.active_project()
+    if active:
+        return active
+    projects = agent.list_projects()
+    if not projects:
+        return None
+    projects.sort(key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
+    return str(projects[0].get("slug") or "") or None
+
+
+def _resolve_project_slug(payload: WorkspaceTaskRequest) -> str | None:
+    context = payload.context or {}
+    options = payload.options or {}
+    raw = context.get("project") or context.get("slug") or options.get("project") or options.get("slug")
+    if raw:
+        return str(raw).strip()
+    return _recent_project_slug()
+
+
+def _chapter_number_from_payload(payload: WorkspaceTaskRequest, slug: str, default: int = 1) -> int:
+    for source in (payload.options or {}, payload.context or {}):
+        value = source.get("chapter_number") or source.get("chapter")
+        if value:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                continue
+    memory = agent.storage.load_project_memory(slug)
+    current = int(memory.get("current_chapter", 0) or 0)
+    return current or default
+
+
+def _result_summary(action: str, result: dict[str, Any] | Path | Any) -> str:
+    if isinstance(result, Path):
+        return f"{action} 执行完成：{result.name}"
+    if isinstance(result, dict):
+        path = result.get("path") or result.get("chapter_path") or result.get("analysis_path")
+        if path:
+            return f"{action} 执行完成：{Path(path).name}"
+        if result.get("message"):
+            return str(result["message"])
+    return f"{action} 执行完成"
+
+
+def _files_from_result(result: dict[str, Any] | Path | Any) -> list[str]:
+    if isinstance(result, Path):
+        return [str(result.resolve())]
+    if not isinstance(result, dict):
+        return []
+    files: list[str] = []
+    for key in ("path", "chapter_path", "analysis_path", "reference_path"):
+        value = result.get(key)
+        if isinstance(value, Path):
+            files.append(str(value.resolve()))
+        elif value:
+            files.append(str(value))
+    return files
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     index_path = WEB_DIR / "index.html"
@@ -148,6 +309,112 @@ def health() -> dict[str, Any]:
         "novels_dir": str(agent.config.novels_dir.resolve()),
         "api_key_configured": bool(agent.config.openai_api_key),
     }
+
+
+@app.get("/api/capabilities")
+def capabilities() -> dict[str, Any]:
+    return {
+        "agent_id": "novelwriter-agent",
+        "name": "小说智能体",
+        "type": "writing",
+        "capabilities": _capabilities(),
+    }
+
+
+@app.post("/api/tasks")
+def run_workspace_task(payload: WorkspaceTaskRequest) -> dict[str, Any]:
+    task_id = str(uuid4())
+    task_text = _resolve_workspace_task_text(payload)
+    action = _detect_workspace_action(task_text)
+    warnings: list[str] = []
+
+    if not task_text:
+        error = "任务内容不能为空。"
+        _record_task(task_id=task_id, task=task_text, action=action, project=None, success=False, error=error)
+        return {"success": False, "agent": "novelwriter-agent", "task_id": task_id, "action": action, "error": error, "warnings": warnings}
+
+    if action == "unknown":
+        error = "暂未识别到可执行的小说操作。请说明要生成设定、人物、世界观、大纲、章节、续写、重写或导出。"
+        _record_task(task_id=task_id, task=task_text, action=action, project=None, success=False, error=error)
+        return {"success": False, "agent": "novelwriter-agent", "task_id": task_id, "action": action, "error": error, "warnings": warnings}
+
+    slug = _resolve_project_slug(payload)
+    if not slug:
+        error = "请先指定小说项目，或在小说智能体中创建项目。"
+        _record_task(task_id=task_id, task=task_text, action=action, project=None, success=False, error=error)
+        return {"success": False, "agent": "novelwriter-agent", "task_id": task_id, "action": action, "error": error, "warnings": warnings}
+
+    try:
+        agent.storage.require_project(slug)
+    except FileNotFoundError:
+        error = f"请先指定有效小说项目，当前找不到项目：{slug}"
+        _record_task(task_id=task_id, task=task_text, action=action, project=slug, success=False, error=error)
+        return {"success": False, "agent": "novelwriter-agent", "task_id": task_id, "action": action, "error": error, "warnings": warnings}
+
+    try:
+        result: Any
+        if action == "generate_setting":
+            result = agent.generate_core_setting(slug)
+        elif action == "generate_characters":
+            result = agent.generate_characters(slug)
+        elif action == "generate_world":
+            result = agent.generate_worldbuilding(slug)
+        elif action == "generate_outline":
+            result = agent.generate_outline(slug)
+        elif action == "generate_first_chapter":
+            result = agent.generate_chapter(slug, 1)
+        elif action == "generate_next_chapter":
+            result = agent.generate_next_chapter(slug)
+        elif action == "rewrite_chapter":
+            chapter_number = _chapter_number_from_payload(payload, slug)
+            instruction = str((payload.options or {}).get("instruction") or task_text)
+            result = agent.rewrite_chapter(slug, chapter_number, instruction)
+        elif action == "continue_chapter":
+            chapter_number = _chapter_number_from_payload(payload, slug)
+            result = agent.continue_chapter(slug, chapter_number)
+        elif action == "export_markdown":
+            result = agent.export_novel(slug)
+        else:
+            raise ValueError("暂未支持该动作。")
+    except Exception as exc:
+        error = str(exc)
+        _record_task(task_id=task_id, task=task_text, action=action, project=slug, success=False, error=error)
+        return {"success": False, "agent": "novelwriter-agent", "task_id": task_id, "action": action, "error": error, "warnings": warnings}
+
+    files = _files_from_result(result)
+    summary = _result_summary(action, result)
+    _record_task(
+        task_id=task_id,
+        task=task_text,
+        action=action,
+        project=slug,
+        success=True,
+        result=summary,
+        files=files,
+        warnings=warnings,
+    )
+    return {
+        "success": True,
+        "agent": "novelwriter-agent",
+        "task_id": task_id,
+        "action": action,
+        "result": summary,
+        "files": files,
+        "warnings": warnings,
+    }
+
+
+@app.get("/api/tasks")
+def list_workspace_tasks() -> dict[str, Any]:
+    return {"tasks": _task_history()}
+
+
+@app.get("/api/tasks/{task_id}")
+def get_workspace_task(task_id: str) -> dict[str, Any]:
+    for task in _task_history():
+        if task.get("task_id") == task_id:
+            return task
+    raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
 
 
 @app.get("/api/projects")

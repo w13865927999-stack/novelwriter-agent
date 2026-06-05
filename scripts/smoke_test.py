@@ -17,11 +17,15 @@ import sys
 import tempfile
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from novelwriter import AppConfig, NovelWriterAgent  # noqa: E402
+from novelwriter.web import app  # noqa: E402
+import novelwriter.web as web_module  # noqa: E402
 
 
 def assert_exists(path: Path, label: str) -> None:
@@ -75,6 +79,7 @@ def assert_web_surface() -> None:
         ROOT / "web" / "styles.css",
         ROOT / "web" / "app.js",
         ROOT / "scripts" / "run_web.py",
+        ROOT / "data" / ".gitkeep",
     ]
     for web_file in web_files:
         assert_exists(web_file, f"web file {web_file.name}")
@@ -127,6 +132,10 @@ def assert_web_surface() -> None:
 
     for marker in [
         '@app.get("/api/health")',
+        '@app.get("/api/capabilities")',
+        '@app.post("/api/tasks")',
+        '@app.get("/api/tasks")',
+        '@app.get("/api/tasks/{task_id}")',
         '@app.post("/api/projects")',
         'kind == "setting"',
         'kind == "characters"',
@@ -145,6 +154,8 @@ def assert_web_surface() -> None:
         '@app.post("/api/projects/{slug}/references/analyze")',
         "chapter_word_count",
         "_ensure_ready_for_chapters",
+        "generate_next_chapter",
+        "请先指定小说项目",
     ]:
         assert_contains(web_text, marker, "novelwriter/web.py")
 
@@ -237,6 +248,50 @@ def assert_splitter_keeps_memory_out_of_text(agent: NovelWriterAgent) -> None:
         raise AssertionError("splitter failed to strip trailing memory JSON from raw text")
 
 
+def assert_workspace_task_api() -> None:
+    client = TestClient(app)
+    capabilities = client.get("/api/capabilities")
+    if capabilities.status_code != 200:
+        raise AssertionError("/api/capabilities must exist")
+    payload = capabilities.json()
+    if payload.get("agent_id") != "novelwriter-agent":
+        raise AssertionError("capabilities must identify novelwriter-agent")
+    names = {item.get("name") for item in payload.get("capabilities", [])}
+    if "generate_next_chapter" not in names or "export_markdown" not in names:
+        raise AssertionError("capabilities missing expected actions")
+
+    original_recent_project = web_module._recent_project_slug
+    web_module._recent_project_slug = lambda: None
+    try:
+        response = client.post("/api/tasks", json={"task": "帮我生成下一章", "context": {}, "options": {}})
+        if response.status_code != 200:
+            raise AssertionError("/api/tasks should not 500 when project is missing")
+        data = response.json()
+        if data.get("success") is not False:
+            raise AssertionError("missing-project task should fail cleanly")
+        if data.get("action") != "generate_next_chapter":
+            raise AssertionError("生成下一章 task was not routed to generate_next_chapter")
+        if "请先指定小说项目" not in data.get("error", ""):
+            raise AssertionError("missing-project error must be clear")
+        task_id = data.get("task_id")
+        if not task_id:
+            raise AssertionError("task response must include task_id")
+
+        task_status = client.get(f"/api/tasks/{task_id}")
+        if task_status.status_code != 200 or task_status.json().get("task_id") != task_id:
+            raise AssertionError("/api/tasks/{task_id} should return stored task")
+
+        list_response = client.get("/api/tasks")
+        if list_response.status_code != 200 or not isinstance(list_response.json().get("tasks"), list):
+            raise AssertionError("GET /api/tasks should list history")
+
+        compatibility = client.post("/api/tasks", json={"message": "继续写下一章", "route": {"intent": "writing"}})
+        if compatibility.status_code != 200 or compatibility.json().get("action") != "generate_next_chapter":
+            raise AssertionError("/api/tasks should accept agent-workspace message payloads")
+    finally:
+        web_module._recent_project_slug = original_recent_project
+
+
 def main() -> int:
     temp_root = Path(tempfile.mkdtemp(prefix="novelwriter-smoke-"))
     keep_dir = os.getenv("NOVELWRITER_KEEP_SMOKE_DIR") == "1"
@@ -247,6 +302,7 @@ def main() -> int:
         agent = NovelWriterAgent(config)
         assert_splitter_keeps_memory_out_of_text(agent)
         assert_chapter_generation_requires_prerequisites(agent)
+        assert_workspace_task_api()
 
         slug, project_path = agent.create_project(
             {
